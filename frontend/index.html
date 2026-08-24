@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Analyst Copilot</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-elevated: #161b22;
+    --bg-card: #1c2129;
+    --border: #2a313c;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #3b82f6;
+    --accent-dim: #1d4ed8;
+    --green: #22c55e;
+    --green-bg: rgba(34, 197, 94, 0.12);
+    --amber: #f59e0b;
+    --amber-bg: rgba(245, 158, 11, 0.12);
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+  }
+  #app { display: flex; height: 100vh; overflow: hidden; }
+
+  /* ---------- Sidebar ---------- */
+  #sidebar {
+    width: 280px; min-width: 280px;
+    background: var(--bg-elevated);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  #sidebar-header { padding: 20px 18px 14px; border-bottom: 1px solid var(--border); }
+  #sidebar-header h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
+  #sidebar-header p { margin: 4px 0 0; font-size: 12px; color: var(--text-dim); }
+
+  #filing-list { flex: 1; overflow-y: auto; padding: 10px; }
+  .filing-item {
+    padding: 10px 12px; margin-bottom: 4px; border-radius: 8px;
+    cursor: pointer; border: 1px solid transparent;
+    transition: background 0.12s;
+  }
+  .filing-item:hover { background: var(--bg-card); }
+  .filing-item.active { background: var(--bg-card); border-color: var(--accent-dim); }
+  .filing-item .name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filing-item .meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .empty-state { color: var(--text-dim); font-size: 12px; padding: 12px; text-align: center; }
+
+  #progress-card {
+    margin: 10px; padding: 12px; border-radius: 8px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    display: none;
+  }
+  #progress-card.visible { display: block; }
+  #progress-card .status { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+  #progress-bar-track { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  #progress-bar-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.25s; }
+
+  #sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+  #add-filing-btn {
+    width: 100%; padding: 10px; border-radius: 8px; border: none;
+    background: var(--accent); color: white; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background 0.12s;
+  }
+  #add-filing-btn:hover { background: var(--accent-dim); }
+
+  /* ---------- Main ---------- */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #header-bar {
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated); font-size: 14px; font-weight: 600;
+  }
+  #header-bar .sub { font-weight: 400; color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+
+  #chat-area { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .msg-row { display: flex; }
+  .msg-row.user { justify-content: flex-end; }
+  .msg-row.assistant { justify-content: flex-start; }
+
+  .bubble-user {
+    max-width: 65%; background: var(--accent); color: white;
+    padding: 10px 14px; border-radius: 14px 14px 2px 14px; font-size: 13.5px; line-height: 1.5;
+  }
+  .bubble-assistant {
+    max-width: 75%; background: var(--bg-card); border: 1px solid var(--border);
+    padding: 14px 16px; border-radius: 14px 14px 14px 2px; font-size: 13.5px; line-height: 1.6;
+  }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-bottom: 10px; }
+  .badge.found { background: var(--green-bg); color: var(--green); }
+  .badge.not-found { background: var(--amber-bg); color: var(--amber); }
+  .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  .answer-text { white-space: pre-wrap; margin-bottom: 10px; }
+
+  .evidence-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-top: 8px; font-size: 12.5px;
+  }
+  .evidence-card .page-tag {
+    display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent);
+    background: rgba(59,130,246,0.12); padding: 2px 8px; border-radius: 4px; margin-bottom: 6px;
+  }
+  .evidence-card .quote { color: var(--text-dim); font-style: italic; line-height: 1.5; }
+
+  .confidence-wrap { margin-top: 10px; }
+  .confidence-label { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; display: flex; justify-content: space-between; }
+  .confidence-track { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .confidence-fill { height: 100%; background: var(--green); }
+
+  .typing-indicator { display: flex; gap: 4px; padding: 4px 0; }
+  .typing-indicator span {
+    width: 6px; height: 6px; background: var(--text-dim); border-radius: 50%;
+    animation: blink 1.4s infinite both;
+  }
+  .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+
+  #welcome { color: var(--text-dim); text-align: center; margin: auto; font-size: 13px; }
+
+  /* ---------- Input ---------- */
+  #input-area { border-top: 1px solid var(--border); background: var(--bg-elevated); padding: 14px 24px 18px; }
+  #chips { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .chip {
+    font-size: 11.5px; padding: 5px 11px; border-radius: 999px;
+    background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim);
+    cursor: pointer; transition: all 0.12s;
+  }
+  .chip:hover { color: var(--text); border-color: var(--accent-dim); }
+
+  #input-row { display: flex; gap: 10px; align-items: flex-end; }
+  #question-input {
+    flex: 1; resize: none; max-height: 140px; min-height: 42px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--text); padding: 10px 14px; font-size: 13.5px; font-family: inherit;
+    outline: none; line-height: 1.4;
+  }
+  #question-input:focus { border-color: var(--accent-dim); }
+  #send-btn {
+    background: var(--accent); border: none; color: white; border-radius: 10px;
+    width: 42px; height: 42px; cursor: pointer; font-size: 16px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #send-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+
+  /* ---------- Modal ---------- */
+  #modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  #modal-overlay.visible { display: flex; }
+  #modal {
+    width: 440px; background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px;
+  }
+  #modal h2 { margin: 0 0 16px; font-size: 16px; }
+  #dropzone {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 28px 16px;
+    text-align: center; cursor: pointer; color: var(--text-dim); font-size: 13px;
+    transition: border-color 0.12s;
+  }
+  #dropzone.dragover { border-color: var(--accent); color: var(--text); }
+  #file-info { margin-top: 10px; font-size: 12.5px; color: var(--text-dim); display: none; }
+  #doc-name-label { display: block; margin: 16px 0 6px; font-size: 12px; color: var(--text-dim); }
+  #doc-name-input {
+    width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg-card); color: var(--text); font-size: 13px; outline: none;
+  }
+  #doc-name-input:focus { border-color: var(--accent-dim); }
+  #modal-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; }
+  .btn-secondary {
+    padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border);
+    background: transparent; color: var(--text); font-size: 13px; cursor: pointer;
+  }
+  .btn-primary {
+    padding: 9px 16px; border-radius: 8px; border: none;
+    background: var(--accent); color: white; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .btn-primary:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+  #modal-progress { display: none; margin-top: 16px; }
+  #modal-progress.visible { display: block; }
+  #modal-progress .status { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1>Analyst Copilot</h1>
+      <p>SEC Filing QA</p>
+    </div>
+    <div id="filing-list"><div class="empty-state">Loading filings...</div></div>
+    <div id="progress-card">
+      <div class="status" id="progress-status">Processing...</div>
+      <div id="progress-bar-track"><div id="progress-bar-fill"></div></div>
+    </div>
+    <div id="sidebar-footer">
+      <button id="add-filing-btn">+ Add Filing</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="header-bar">
+      <div id="header-title">Select a filing</div>
+      <div class="sub" id="header-sub">Choose a filing from the sidebar to begin</div>
+    </div>
+    <div id="chat-area">
+      <div id="welcome">Select a filing, then ask a question like "What was FY2022 revenue?"</div>
+    </div>
+    <div id="input-area">
+      <div id="chips">
+        <div class="chip" data-q="What was total revenue for the most recent fiscal year?">Revenue</div>
+        <div class="chip" data-q="What was capital expenditure for the most recent fiscal year?">Capex</div>
+        <div class="chip" data-q="What are the key risk factors mentioned in this filing?">Risk factors</div>
+        <div class="chip" data-q="What was operating income for the most recent fiscal year?">Operating income</div>
+        <div class="chip" data-q="What was cash and cash equivalents at year end?">Cash</div>
+      </div>
+      <div id="input-row">
+        <textarea id="question-input" placeholder="Ask a question about this filing..." rows="1" disabled></textarea>
+        <button id="send-btn" disabled>&#8593;</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal">
+    <h2>Add Filing</h2>
+    <div id="dropzone">
+      Drag &amp; drop a .htm filing here<br/>or click to browse
+      <input type="file" id="file-input" accept=".htm,.html" style="display:none" />
+    </div>
+    <div id="file-info"></div>
+    <label id="doc-name-label" for="doc-name-input">Document name</label>
+    <input type="text" id="doc-name-input" placeholder="e.g. APPLE_2023_10K" />
+    <div id="modal-progress">
+      <div class="status" id="modal-progress-status">Processing...</div>
+      <div id="progress-bar-track"><div id="modal-progress-bar-fill" style="height:100%;width:0%;background:var(--accent);transition:width .25s;"></div></div>
+    </div>
+    <div id="modal-actions">
+      <button class="btn-secondary" id="cancel-btn">Cancel</button>
+      <button class="btn-primary" id="index-btn" disabled>Index Filing</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "";
+let activeFiling = null;
+let selectedFile = null;
+let isUploading = false;
+
+// ---------- helpers ----------
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+// ---------- filing list ----------
+async function loadFilings(selectDocName) {
+  const listEl = document.getElementById("filing-list");
+  try {
+    const res = await fetch(API_BASE + "/api/filings");
+    const filings = await res.json();
+    if (!filings.length) {
+      listEl.innerHTML = '<div class="empty-state">No filings indexed yet. Click "Add Filing" to get started.</div>';
+      return;
+    }
+    listEl.innerHTML = "";
+    filings.forEach(f => {
+      const div = document.createElement("div");
+      div.className = "filing-item" + (f.doc_name === activeFiling ? " active" : "");
+      const pageInfo = f.pages ? `Pages ${f.pages.min}-${f.pages.max} &middot; ${f.chunk_count} chunks` : `${f.chunk_count} chunks`;
+      div.innerHTML = `<div class="name">${escapeHtml(f.doc_name)}</div><div class="meta">${pageInfo}</div>`;
+      div.addEventListener("click", () => selectFiling(f.doc_name));
+      listEl.appendChild(div);
+    });
+    if (selectDocName) selectFiling(selectDocName);
+  } catch (e) {
+    listEl.innerHTML = '<div class="empty-state">Failed to load filings.</div>';
+  }
+}
+
+function selectFiling(docName) {
+  activeFiling = docName;
+  document.querySelectorAll(".filing-item").forEach(el => {
+    el.classList.toggle("active", el.querySelector(".name").textContent === docName);
+  });
+  document.getElementById("header-title").textContent = docName;
+  document.getElementById("header-sub").textContent = "Ask a question about this filing";
+  document.getElementById("question-input").disabled = false;
+  document.getElementById("chat-area").innerHTML = "";
+  updateSendState();
+}
+
+// ---------- chat ----------
+const chatArea = document.getElementById("chat-area");
+const questionInput = document.getElementById("question-input");
+const sendBtn = document.getElementById("send-btn");
+
+function updateSendState() {
+  sendBtn.disabled = !activeFiling || !questionInput.value.trim();
+}
+
+questionInput.addEventListener("input", () => {
+  questionInput.style.height = "auto";
+  questionInput.style.height = Math.min(140, questionInput.scrollHeight) + "px";
+  updateSendState();
+});
+
+questionInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (!sendBtn.disabled) sendMessage();
+  }
+});
+
+sendBtn.addEventListener("click", sendMessage);
+
+document.querySelectorAll(".chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    if (!activeFiling) return;
+    questionInput.value = chip.dataset.q;
+    updateSendState();
+    sendMessage();
+  });
+});
+
+function addUserBubble(text) {
+  const row = document.createElement("div");
+  row.className = "msg-row user";
+  row.innerHTML = `<div class="bubble-user">${escapeHtml(text)}</div>`;
+  chatArea.appendChild(row);
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+function addAssistantBubble() {
+  const row = document.createElement("div");
+  row.className = "msg-row assistant";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble-assistant";
+  bubble.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+  row.appendChild(bubble);
+  chatArea.appendChild(row);
+  chatArea.scrollTop = chatArea.scrollHeight;
+  return bubble;
+}
+
+function renderResult(bubble, streamedText, result) {
+  const found = !!result.found;
+  const badgeClass = found ? "found" : "not-found";
+  const badgeText = found ? "Answer Found" : "Not Found";
+  const answerText = found ? (result.answer || streamedText || "") : "This information could not be verified in this filing.";
+  const confidencePct = Math.round((result.confidence || 0) * 100);
+
+  let html = `<span class="badge ${badgeClass}"><span class="dot"></span>${badgeText}</span>`;
+  html += `<div class="answer-text">${escapeHtml(answerText)}</div>`;
+
+  if (found && result.page_num) {
+    html += `<div class="evidence-card">
+      <span class="page-tag">Page ${escapeHtml(result.page_num)}</span>
+      <div class="quote">&ldquo;${escapeHtml(result.evidence_text || "")}&rdquo;</div>
+    </div>`;
+  }
+
+  html += `<div class="confidence-wrap">
+    <div class="confidence-label"><span>Confidence</span><span>${confidencePct}%</span></div>
+    <div class="confidence-track"><div class="confidence-fill" style="width:${confidencePct}%"></div></div>
+  </div>`;
+
+  bubble.innerHTML = html;
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+async function sendMessage() {
+  const question = questionInput.value.trim();
+  if (!question || !activeFiling) return;
+
+  document.getElementById("welcome")?.remove();
+  addUserBubble(question);
+  questionInput.value = "";
+  questionInput.style.height = "auto";
+  updateSendState();
+
+  const bubble = addAssistantBubble();
+  let streamedText = "";
+  let gotDelta = false;
+
+  try {
+    const res = await fetch(API_BASE + "/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, doc_name: activeFiling, top_k: 5 }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      bubble.innerHTML = `<span class="badge not-found"><span class="dot"></span>Error</span><div class="answer-text">${escapeHtml(errBody.detail || "Request failed.")}</div>`;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr) continue;
+        let event;
+        try { event = JSON.parse(jsonStr); } catch { continue; }
+
+        if (event.type === "delta") {
+          if (!gotDelta) { bubble.innerHTML = '<div class="answer-text"></div>'; gotDelta = true; }
+          streamedText += event.content;
+          bubble.querySelector(".answer-text").textContent = streamedText;
+          chatArea.scrollTop = chatArea.scrollHeight;
+        } else if (event.type === "result") {
+          renderResult(bubble, streamedText, event);
+        } else if (event.type === "chunks") {
+          // retrieval metadata available in event.chunks if needed for debugging
+        }
+      }
+    }
+  } catch (e) {
+    bubble.innerHTML = `<span class="badge not-found"><span class="dot"></span>Error</span><div class="answer-text">Connection failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ---------- upload modal ----------
+const modalOverlay = document.getElementById("modal-overlay");
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("file-input");
+const fileInfo = document.getElementById("file-info");
+const docNameInput = document.getElementById("doc-name-input");
+const indexBtn = document.getElementById("index-btn");
+const cancelBtn = document.getElementById("cancel-btn");
+const modalProgress = document.getElementById("modal-progress");
+const modalProgressBar = document.getElementById("modal-progress-bar-fill");
+const modalProgressStatus = document.getElementById("modal-progress-status");
+
+document.getElementById("add-filing-btn").addEventListener("click", () => {
+  resetModal();
+  modalOverlay.classList.add("visible");
+});
+
+cancelBtn.addEventListener("click", () => {
+  if (isUploading) return;
+  modalOverlay.classList.remove("visible");
+});
+
+modalOverlay.addEventListener("click", (e) => {
+  if (e.target === modalOverlay && !isUploading) modalOverlay.classList.remove("visible");
+});
+
+dropzone.addEventListener("click", () => fileInput.click());
+
+dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("dragover");
+  if (e.dataTransfer.files.length) handleFileSelect(e.dataTransfer.files[0]);
+});
+
+fileInput.addEventListener("change", () => {
+  if (fileInput.files.length) handleFileSelect(fileInput.files[0]);
+});
+
+function handleFileSelect(file) {
+  if (!file.name.toLowerCase().endsWith(".htm") && !file.name.toLowerCase().endsWith(".html")) {
+    alert("Only .htm and .html files are accepted.");
+    return;
+  }
+  selectedFile = file;
+  fileInfo.style.display = "block";
+  fileInfo.textContent = `${file.name} (${formatBytes(file.size)})`;
+  const stem = file.name.replace(/\.(htm|html)$/i, "");
+  docNameInput.value = stem;
+  indexBtn.disabled = false;
+}
+
+function resetModal() {
+  selectedFile = null;
+  fileInput.value = "";
+  fileInfo.style.display = "none";
+  docNameInput.value = "";
+  indexBtn.disabled = true;
+  modalProgress.classList.remove("visible");
+  modalProgressBar.style.width = "0%";
+  isUploading = false;
+  cancelBtn.disabled = false;
+}
+
+indexBtn.addEventListener("click", uploadAndIndex);
+
+async function uploadAndIndex() {
+  if (!selectedFile) return;
+  isUploading = true;
+  indexBtn.disabled = true;
+  cancelBtn.disabled = true;
+  modalProgress.classList.add("visible");
+  modalProgressStatus.textContent = "Uploading...";
+  modalProgressBar.style.width = "2%";
+
+  const docName = docNameInput.value.trim() || selectedFile.name.replace(/\.(htm|html)$/i, "");
+
+  const formData = new FormData();
+  formData.append("file", selectedFile);
+  formData.append("doc_name", docName);
+
+  try {
+    const res = await fetch(API_BASE + "/api/filings/upload", { method: "POST", body: formData });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      modalProgressStatus.textContent = "Error: " + (err.detail || "upload failed");
+      isUploading = false;
+      cancelBtn.disabled = false;
+      indexBtn.disabled = false;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let completed = false;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr) continue;
+        let event;
+        try { event = JSON.parse(jsonStr); } catch { continue; }
+
+        if (event.type === "progress") {
+          modalProgressStatus.textContent = event.message;
+          modalProgressBar.style.width = Math.round((event.progress || 0) * 100) + "%";
+        } else if (event.type === "complete") {
+          modalProgressStatus.textContent = event.message;
+          modalProgressBar.style.width = "100%";
+          completed = true;
+        } else if (event.type === "error") {
+          modalProgressStatus.textContent = "Error: " + event.message;
+        }
+      }
+    }
+
+    isUploading = false;
+    cancelBtn.disabled = false;
+
+    if (completed) {
+      setTimeout(() => {
+        modalOverlay.classList.remove("visible");
+        loadFilings(docName);
+      }, 600);
+    } else {
+      indexBtn.disabled = false;
+    }
+  } catch (e) {
+    modalProgressStatus.textContent = "Connection failed: " + e.message;
+    isUploading = false;
+    cancelBtn.disabled = false;
+    indexBtn.disabled = false;
+  }
+}
+
+// ---------- init ----------
+loadFilings();
+</script>
+</body>
+</html>

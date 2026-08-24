@@ -1,0 +1,11 @@
+data/indexes/
+data/uploads/
+data/filings/
+data/practice-questions.jsonl
+__pycache__/
+*.pyc
+.env
+*.pkl
+*.npy
+eval_results.json
+*.log
