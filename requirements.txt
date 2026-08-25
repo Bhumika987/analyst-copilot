@@ -6,6 +6,7 @@ beautifulsoup4
 lxml
 rank-bm25
 faiss-cpu
+sentence-transformers
 numpy
 httpx
 pydantic

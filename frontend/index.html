@@ -197,7 +197,7 @@
   <div id="sidebar">
     <div id="sidebar-header">
       <h1>Analyst Copilot</h1>
-      <p>SEC Filing QA</p>
+      <p>SEC Filing QA & Cross-Filing Intelligence</p>
     </div>
     <div id="filing-list"><div class="empty-state">Loading filings...</div></div>
     <div id="progress-card">
@@ -205,29 +205,29 @@
       <div id="progress-bar-track"><div id="progress-bar-fill"></div></div>
     </div>
     <div id="sidebar-footer">
-      <button id="add-filing-btn">+ Add Filing</button>
+      <button id="add-filing-btn">+ Add Filing(s)</button>
     </div>
   </div>
 
   <div id="main">
     <div id="header-bar">
-      <div id="header-title">Select a filing</div>
-      <div class="sub" id="header-sub">Choose a filing from the sidebar to begin</div>
+      <div id="header-title">All Filings (Cross-Filing Search)</div>
+      <div class="sub" id="header-sub">Search automatically across all ingested filings</div>
     </div>
     <div id="chat-area">
-      <div id="welcome">Select a filing, then ask a question like "What was FY2022 revenue?"</div>
+      <div id="welcome">Ask any question across all ingested filings. The copilot will automatically locate relevant evidence across filings and synthesize the answer.</div>
     </div>
     <div id="input-area">
       <div id="chips">
-        <div class="chip" data-q="What was total revenue for the most recent fiscal year?">Revenue</div>
-        <div class="chip" data-q="What was capital expenditure for the most recent fiscal year?">Capex</div>
-        <div class="chip" data-q="What are the key risk factors mentioned in this filing?">Risk factors</div>
-        <div class="chip" data-q="What was operating income for the most recent fiscal year?">Operating income</div>
-        <div class="chip" data-q="What was cash and cash equivalents at year end?">Cash</div>
+        <div class="chip" data-q="How did revenue change compared with the previous year?">Revenue change</div>
+        <div class="chip" data-q="What were the major risk factors mentioned across filings?">Risk factors</div>
+        <div class="chip" data-q="Compare capital expenditures between filings.">Compare capex</div>
+        <div class="chip" data-q="What was operating income and cash position at year end?">Operating income</div>
+        <div class="chip" data-q="What are the main business segments?">Business segments</div>
       </div>
       <div id="input-row">
-        <textarea id="question-input" placeholder="Ask a question about this filing..." rows="1" disabled></textarea>
-        <button id="send-btn" disabled>&#8593;</button>
+        <textarea id="question-input" placeholder="Ask a question across all ingested filings..." rows="1"></textarea>
+        <button id="send-btn">&#8593;</button>
       </div>
     </div>
   </div>
@@ -235,29 +235,31 @@
 
 <div id="modal-overlay">
   <div id="modal">
-    <h2>Add Filing</h2>
+    <h2>Add Filing(s)</h2>
     <div id="dropzone">
-      Drag &amp; drop a .htm filing here<br/>or click to browse
-      <input type="file" id="file-input" accept=".htm,.html" style="display:none" />
+      Drag &amp; drop one or multiple .htm filings here<br/>or click to browse
+      <input type="file" id="file-input" accept=".htm,.html" multiple style="display:none" />
     </div>
     <div id="file-info"></div>
-    <label id="doc-name-label" for="doc-name-input">Document name</label>
-    <input type="text" id="doc-name-input" placeholder="e.g. APPLE_2023_10K" />
+    <div id="single-name-wrap">
+      <label id="doc-name-label" for="doc-name-input">Document name</label>
+      <input type="text" id="doc-name-input" placeholder="e.g. APPLE_2023_10K" />
+    </div>
     <div id="modal-progress">
       <div class="status" id="modal-progress-status">Processing...</div>
       <div id="progress-bar-track"><div id="modal-progress-bar-fill" style="height:100%;width:0%;background:var(--accent);transition:width .25s;"></div></div>
     </div>
     <div id="modal-actions">
       <button class="btn-secondary" id="cancel-btn">Cancel</button>
-      <button class="btn-primary" id="index-btn" disabled>Index Filing</button>
+      <button class="btn-primary" id="index-btn" disabled>Index Filing(s)</button>
     </div>
   </div>
 </div>
 
 <script>
 const API_BASE = "";
-let activeFiling = null;
-let selectedFile = null;
+let activeFiling = "all";
+let selectedFiles = [];
 let isUploading = false;
 
 // ---------- helpers ----------
@@ -283,34 +285,64 @@ async function loadFilings(selectDocName) {
   try {
     const res = await fetch(API_BASE + "/api/filings");
     const filings = await res.json();
+    
+    listEl.innerHTML = "";
+
+    // Always render 'All Filings' item first
+    const allDiv = document.createElement("div");
+    allDiv.className = "filing-item" + (activeFiling === "all" ? " active" : "");
+    allDiv.innerHTML = `<div class="name">🌐 All Filings (Cross-Filing)</div><div class="meta">${filings.length} filings indexed</div>`;
+    allDiv.addEventListener("click", () => selectFiling("all"));
+    listEl.appendChild(allDiv);
+
     if (!filings.length) {
-      listEl.innerHTML = '<div class="empty-state">No filings indexed yet. Click "Add Filing" to get started.</div>';
+      const emptyDiv = document.createElement("div");
+      emptyDiv.className = "empty-state";
+      emptyDiv.textContent = 'No individual filings indexed yet. Click "Add Filing(s)" to upload.';
+      listEl.appendChild(emptyDiv);
       return;
     }
-    listEl.innerHTML = "";
+
     filings.forEach(f => {
       const div = document.createElement("div");
       div.className = "filing-item" + (f.doc_name === activeFiling ? " active" : "");
-      const pageInfo = f.pages ? `Pages ${f.pages.min}-${f.pages.max} &middot; ${f.chunk_count} chunks` : `${f.chunk_count} chunks`;
-      div.innerHTML = `<div class="name">${escapeHtml(f.doc_name)}</div><div class="meta">${pageInfo}</div>`;
+      const metaObj = f.metadata || {};
+      const compStr = metaObj.company && metaObj.company !== "Unknown Company" ? metaObj.company : "";
+      const typeStr = metaObj.filing_type || "";
+      const yrStr = metaObj.fiscal_year || "";
+      const metaTags = [compStr, typeStr, yrStr].filter(Boolean).join(" &middot; ");
+      const pageInfo = f.pages ? `Pages ${f.pages.min}-${f.pages.max} (${f.chunk_count} chunks)` : `${f.chunk_count} chunks`;
+      const metaLine = metaTags ? `${metaTags} &middot; ${pageInfo}` : pageInfo;
+      div.innerHTML = `<div class="name">📄 ${escapeHtml(f.doc_name)}</div><div class="meta">${metaLine}</div>`;
       div.addEventListener("click", () => selectFiling(f.doc_name));
       listEl.appendChild(div);
     });
+
     if (selectDocName) selectFiling(selectDocName);
+    else selectFiling(activeFiling);
   } catch (e) {
     listEl.innerHTML = '<div class="empty-state">Failed to load filings.</div>';
   }
 }
 
 function selectFiling(docName) {
-  activeFiling = docName;
+  activeFiling = docName || "all";
   document.querySelectorAll(".filing-item").forEach(el => {
-    el.classList.toggle("active", el.querySelector(".name").textContent === docName);
+    const isAll = activeFiling === "all" && el.textContent.includes("All Filings");
+    const isDoc = el.querySelector(".name")?.textContent.includes(activeFiling);
+    el.classList.toggle("active", isAll || isDoc);
   });
-  document.getElementById("header-title").textContent = docName;
-  document.getElementById("header-sub").textContent = "Ask a question about this filing";
+
+  if (activeFiling === "all") {
+    document.getElementById("header-title").textContent = "🌐 All Filings (Cross-Filing Search)";
+    document.getElementById("header-sub").textContent = "Search automatically across all ingested filings";
+    document.getElementById("question-input").placeholder = "Ask a question across all filings...";
+  } else {
+    document.getElementById("header-title").textContent = "📄 " + activeFiling;
+    document.getElementById("header-sub").textContent = "Filtering search to " + activeFiling;
+    document.getElementById("question-input").placeholder = `Ask a question about ${activeFiling}...`;
+  }
   document.getElementById("question-input").disabled = false;
-  document.getElementById("chat-area").innerHTML = "";
   updateSendState();
 }
 
@@ -320,7 +352,7 @@ const questionInput = document.getElementById("question-input");
 const sendBtn = document.getElementById("send-btn");
 
 function updateSendState() {
-  sendBtn.disabled = !activeFiling || !questionInput.value.trim();
+  sendBtn.disabled = !questionInput.value.trim();
 }
 
 questionInput.addEventListener("input", () => {
@@ -340,7 +372,6 @@ sendBtn.addEventListener("click", sendMessage);
 
 document.querySelectorAll(".chip").forEach(chip => {
   chip.addEventListener("click", () => {
-    if (!activeFiling) return;
     questionInput.value = chip.dataset.q;
     updateSendState();
     sendMessage();
@@ -371,17 +402,22 @@ function renderResult(bubble, streamedText, result) {
   const found = !!result.found;
   const badgeClass = found ? "found" : "not-found";
   const badgeText = found ? "Answer Found" : "Not Found";
-  const answerText = found ? (result.answer || streamedText || "") : "This information could not be verified in this filing.";
+  const answerText = found ? (result.answer || streamedText || "") : "This information could not be verified in the ingested filing(s).";
   const confidencePct = Math.round((result.confidence || 0) * 100);
 
   let html = `<span class="badge ${badgeClass}"><span class="dot"></span>${badgeText}</span>`;
   html += `<div class="answer-text">${escapeHtml(answerText)}</div>`;
 
-  if (found && result.page_num) {
-    html += `<div class="evidence-card">
-      <span class="page-tag">Page ${escapeHtml(result.page_num)}</span>
-      <div class="quote">&ldquo;${escapeHtml(result.evidence_text || "")}&rdquo;</div>
-    </div>`;
+  const sources = result.sources && result.sources.length ? result.sources : (result.page_num ? [{doc_name: result.doc_name, page_num: result.page_num, evidence_text: result.evidence_text}] : []);
+
+  if (found && sources.length) {
+    sources.forEach(src => {
+      const docLabel = src.doc_name ? `Filing: ${src.doc_name} &middot; ` : "";
+      html += `<div class="evidence-card">
+        <span class="page-tag">${docLabel}Page ${escapeHtml(src.page_num)}</span>
+        <div class="quote">&ldquo;${escapeHtml(src.evidence_text || "")}&rdquo;</div>
+      </div>`;
+    });
   }
 
   html += `<div class="confidence-wrap">
@@ -389,13 +425,25 @@ function renderResult(bubble, streamedText, result) {
     <div class="confidence-track"><div class="confidence-fill" style="width:${confidencePct}%"></div></div>
   </div>`;
 
+  if (result.debug_info) {
+    const dbg = result.debug_info;
+    html += `<details style="margin-top:10px;font-size:11px;color:var(--text-dim);">
+      <summary style="cursor:pointer;">🔍 Pipeline Trace &amp; Debug Info</summary>
+      <div style="margin-top:6px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);">
+        <div><strong>Filings Searched:</strong> ${dbg.num_filings_searched} (${(dbg.source_filings || []).join(", ")})</div>
+        <div><strong>Retrieved Chunks:</strong> ${(dbg.retrieved_chunks || []).length}</div>
+        <div><strong>Verification Result:</strong> ${escapeHtml(dbg.verification_result)}</div>
+      </div>
+    </details>`;
+  }
+
   bubble.innerHTML = html;
   chatArea.scrollTop = chatArea.scrollHeight;
 }
 
 async function sendMessage() {
   const question = questionInput.value.trim();
-  if (!question || !activeFiling) return;
+  if (!question) return;
 
   document.getElementById("welcome")?.remove();
   addUserBubble(question);
@@ -411,7 +459,7 @@ async function sendMessage() {
     const res = await fetch(API_BASE + "/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, doc_name: activeFiling, top_k: 5 }),
+      body: JSON.stringify({ question, doc_name: activeFiling, top_k: 8 }),
     });
 
     if (!res.ok) {
@@ -445,8 +493,6 @@ async function sendMessage() {
           chatArea.scrollTop = chatArea.scrollHeight;
         } else if (event.type === "result") {
           renderResult(bubble, streamedText, event);
-        } else if (event.type === "chunks") {
-          // retrieval metadata available in event.chunks if needed for debugging
         }
       }
     }
@@ -460,6 +506,7 @@ const modalOverlay = document.getElementById("modal-overlay");
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("file-input");
 const fileInfo = document.getElementById("file-info");
+const singleNameWrap = document.getElementById("single-name-wrap");
 const docNameInput = document.getElementById("doc-name-input");
 const indexBtn = document.getElementById("index-btn");
 const cancelBtn = document.getElementById("cancel-btn");
@@ -488,30 +535,38 @@ dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover
 dropzone.addEventListener("drop", (e) => {
   e.preventDefault();
   dropzone.classList.remove("dragover");
-  if (e.dataTransfer.files.length) handleFileSelect(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) handleFilesSelect(Array.from(e.dataTransfer.files));
 });
 
 fileInput.addEventListener("change", () => {
-  if (fileInput.files.length) handleFileSelect(fileInput.files[0]);
+  if (fileInput.files.length) handleFilesSelect(Array.from(fileInput.files));
 });
 
-function handleFileSelect(file) {
-  if (!file.name.toLowerCase().endsWith(".htm") && !file.name.toLowerCase().endsWith(".html")) {
+function handleFilesSelect(files) {
+  const validFiles = files.filter(f => f.name.toLowerCase().endsWith(".htm") || f.name.toLowerCase().endsWith(".html"));
+  if (!validFiles.length) {
     alert("Only .htm and .html files are accepted.");
     return;
   }
-  selectedFile = file;
+  selectedFiles = validFiles;
   fileInfo.style.display = "block";
-  fileInfo.textContent = `${file.name} (${formatBytes(file.size)})`;
-  const stem = file.name.replace(/\.(htm|html)$/i, "");
-  docNameInput.value = stem;
+  if (selectedFiles.length === 1) {
+    const f = selectedFiles[0];
+    fileInfo.textContent = `${f.name} (${formatBytes(f.size)})`;
+    docNameInput.value = f.name.replace(/\.(htm|html)$/i, "");
+    singleNameWrap.style.display = "block";
+  } else {
+    fileInfo.textContent = `Selected ${selectedFiles.length} files: ${selectedFiles.map(f => f.name).join(", ")}`;
+    singleNameWrap.style.display = "none";
+  }
   indexBtn.disabled = false;
 }
 
 function resetModal() {
-  selectedFile = null;
+  selectedFiles = [];
   fileInput.value = "";
   fileInfo.style.display = "none";
+  singleNameWrap.style.display = "block";
   docNameInput.value = "";
   indexBtn.disabled = true;
   modalProgress.classList.remove("visible");
@@ -523,7 +578,7 @@ function resetModal() {
 indexBtn.addEventListener("click", uploadAndIndex);
 
 async function uploadAndIndex() {
-  if (!selectedFile) return;
+  if (!selectedFiles.length) return;
   isUploading = true;
   indexBtn.disabled = true;
   cancelBtn.disabled = true;
@@ -531,14 +586,22 @@ async function uploadAndIndex() {
   modalProgressStatus.textContent = "Uploading...";
   modalProgressBar.style.width = "2%";
 
-  const docName = docNameInput.value.trim() || selectedFile.name.replace(/\.(htm|html)$/i, "");
-
+  const isBulk = selectedFiles.length > 1;
+  const url = isBulk ? API_BASE + "/api/filings/upload_bulk" : API_BASE + "/api/filings/upload";
   const formData = new FormData();
-  formData.append("file", selectedFile);
-  formData.append("doc_name", docName);
+  let uploadedDocName = "all";
+
+  if (isBulk) {
+    selectedFiles.forEach(f => formData.append("files", f));
+  } else {
+    const f = selectedFiles[0];
+    const docName = docNameInput.value.trim() || f.name.replace(/\.(htm|html)$/i, "");
+    formData.append("file", f);
+    formData.append("doc_name", docName);
+  }
 
   try {
-    const res = await fetch(API_BASE + "/api/filings/upload", { method: "POST", body: formData });
+    const res = await fetch(url, { method: "POST", body: formData });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       modalProgressStatus.textContent = "Error: " + (err.detail || "upload failed");
@@ -568,9 +631,11 @@ async function uploadAndIndex() {
         try { event = JSON.parse(jsonStr); } catch { continue; }
 
         if (event.type === "progress") {
-          modalProgressStatus.textContent = event.message;
-          modalProgressBar.style.width = Math.round((event.progress || 0) * 100) + "%";
-        } else if (event.type === "complete") {
+          const docLabel = event.doc_name ? `[${event.doc_name}] ` : "";
+          modalProgressStatus.textContent = docLabel + event.message;
+          const pct = event.overall_progress !== undefined ? event.overall_progress : event.progress || 0;
+          modalProgressBar.style.width = Math.round(pct * 100) + "%";
+        } else if (event.type === "complete" || event.type === "bulk_complete") {
           modalProgressStatus.textContent = event.message;
           modalProgressBar.style.width = "100%";
           completed = true;
@@ -586,7 +651,7 @@ async function uploadAndIndex() {
     if (completed) {
       setTimeout(() => {
         modalOverlay.classList.remove("visible");
-        loadFilings(docName);
+        loadFilings(uploadedDocName);
       }, 600);
     } else {
       indexBtn.disabled = false;
@@ -600,7 +665,8 @@ async function uploadAndIndex() {
 }
 
 // ---------- init ----------
-loadFilings();
+loadFilings("all");
 </script>
+
 </body>
 </html>

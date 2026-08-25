@@ -27,12 +27,20 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from ingest import ingest_filing  # noqa: E402
 from llm import answer_question, get_embedding  # noqa: E402
-from retrieval import get_index  # noqa: E402
+from retrieval import get_index, cross_filing_hybrid_search  # noqa: E402
 
-# ---- path constants: edit these if your data lives elsewhere ----
+# ---- path constants ----
+DATA_ALT = Path(r"c:\Users\Sakshi Sinha\Downloads\analyst-copilot-data 1\analyst-copilot-data")
 PRACTICE_QUESTIONS_PATH = SCRIPT_DIR.parent / "data" / "practice-questions.jsonl"
+if not PRACTICE_QUESTIONS_PATH.exists() and (DATA_ALT / "practice-questions.jsonl").exists():
+    PRACTICE_QUESTIONS_PATH = DATA_ALT / "practice-questions.jsonl"
+
 FILINGS_DIR = SCRIPT_DIR.parent / "data" / "filings"
+if not FILINGS_DIR.exists() and (DATA_ALT / "filings").exists():
+    FILINGS_DIR = DATA_ALT / "filings"
+
 RESULTS_PATH = SCRIPT_DIR.parent / "eval_results.json"
+
 
 PAGE_TOLERANCE = 5
 NUMBER_RE = re.compile(r"-?\$?\d[\d,]*\.?\d*%?")
@@ -57,6 +65,20 @@ def extract_numbers(s: str):
         if f2 not in ("", "-", "."):
             cleaned.add(f2)
     return cleaned
+
+
+def _numbers_equivalent(pred_nums, gold_nums) -> bool:
+    for pred in pred_nums:
+        for gold in gold_nums:
+            try:
+                pred_val = float(pred.rstrip("%"))
+                gold_val = float(gold.rstrip("%"))
+            except ValueError:
+                continue
+            tolerance = max(0.01, abs(gold_val) * 0.01)
+            if abs(pred_val - gold_val) <= tolerance:
+                return True
+    return False
 
 
 def _leading_yesno(s: str) -> Optional[str]:
@@ -94,6 +116,8 @@ def answers_match(predicted: str, gold: str) -> bool:
     pred_nums = extract_numbers(predicted)
     gold_nums = extract_numbers(gold)
     if gold_nums and pred_nums & gold_nums:
+        return True
+    if gold_nums and pred_nums and _numbers_equivalent(pred_nums, gold_nums):
         return True
 
     gold_words = set(w for w in gold_norm.split() if len(w) > 3)

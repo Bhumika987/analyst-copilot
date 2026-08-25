@@ -1,8 +1,8 @@
-"""FastAPI app: filing upload/indexing + chat over indexed filings."""
+"""FastAPI app: bulk filing upload/indexing + cross-filing chat over indexed filings."""
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -11,9 +11,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ingest import ingest_filing_stream
+from ingest import ingest_filing_stream, ingest_bulk_filings_stream
 from llm import answer_question, get_embedding, stream_answer
-from retrieval import get_index, list_indexed_docs
+from retrieval import get_index, list_indexed_docs, cross_filing_hybrid_search
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -36,8 +36,8 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     question: str
-    doc_name: str
-    top_k: int = 5
+    doc_name: Optional[str] = "all"
+    top_k: int = 8
 
 
 def _sse(event: dict) -> str:
@@ -67,6 +67,7 @@ async def list_filings():
             "doc_name": doc_name,
             "chunk_count": len(idx.chunks),
             "pages": {"min": pages[0], "max": pages[-1]} if pages else None,
+            "metadata": idx.metadata,
         })
     return result
 
@@ -89,28 +90,69 @@ async def upload_filing(file: UploadFile = File(...), doc_name: Optional[str] = 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@app.post("/api/filings/upload_bulk")
+async def upload_bulk(files: List[UploadFile] = File(...)):
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided for bulk upload.")
+
+    file_specs = []
+    for file in files:
+        filename = file.filename or ""
+        if not (filename.lower().endswith(".htm") or filename.lower().endswith(".html")):
+            continue
+        dest_path = UPLOAD_DIR / filename
+        contents = await file.read()
+        dest_path.write_bytes(contents)
+        doc_name = Path(filename).stem
+        file_specs.append((str(dest_path), doc_name))
+
+    if not file_specs:
+        raise HTTPException(status_code=400, detail="None of the uploaded files were valid .htm or .html files.")
+
+    async def event_stream():
+        async for event in ingest_bulk_filings_stream(file_specs, use_embeddings=True):
+            yield _sse(event)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    index = get_index(req.doc_name)
-    if index is None or not index.is_indexed():
-        raise HTTPException(status_code=404, detail=f"Filing '{req.doc_name}' is not indexed.")
-
+    target_doc = req.doc_name or "all"
     query_vector = get_embedding(req.question)
-    results = index.hybrid_search(req.question, query_vector, top_k=req.top_k)
+    results = cross_filing_hybrid_search(req.question, query_vector, doc_name=target_doc, top_k=req.top_k)
 
     async def event_stream():
         chunk_meta = [
             {
+                "chunk_idx": c.get("chunk_idx"),
+                "doc_name": c.get("doc_name"),
+                "company": c.get("company"),
+                "filing_type": c.get("filing_type"),
+                "fiscal_year": c.get("fiscal_year"),
                 "page_num": c.get("page_num"),
+                "statement_type": c.get("statement_type"),
                 "chunk_type": c.get("chunk_type"),
-                "retrieval_score": c.get("retrieval_score"),
+                "content_evidence_score": c.get("content_evidence_score"),
+                "rerank_score": c.get("rerank_score"),
+                "concept_matched": c.get("concept_matched"),
                 "text_preview": (c.get("text") or "")[:200],
             }
             for c in results
         ]
         yield _sse({"type": "chunks", "chunks": chunk_meta})
 
-        async for event in stream_answer(req.question, req.doc_name, results):
+        async for event in stream_answer(req.question, target_doc, results):
+            if event.get("type") == "result":
+                print("\n==================================================")
+                print("[FINAL RESPONSE] (Endpoint: /api/chat)")
+                print(f"found: {event.get('found')}")
+                print(f"answer: {event.get('answer')}")
+                print(f"confidence: {event.get('confidence')}")
+                print(f"sources: {event.get('sources')}")
+                dbg = event.get("debug_info", {})
+                print(f"retrieval_status: {dbg.get('retrieval_status')}")
+                print("==================================================\n")
             yield _sse(event)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -118,19 +160,40 @@ async def chat(req: ChatRequest):
 
 @app.post("/api/chat/sync")
 async def chat_sync(req: ChatRequest):
-    index = get_index(req.doc_name)
-    if index is None or not index.is_indexed():
-        raise HTTPException(status_code=404, detail=f"Filing '{req.doc_name}' is not indexed.")
-
+    target_doc = req.doc_name or "all"
     query_vector = get_embedding(req.question)
-    results = index.hybrid_search(req.question, query_vector, top_k=req.top_k)
+    results = cross_filing_hybrid_search(req.question, query_vector, doc_name=target_doc, top_k=req.top_k)
 
-    result = await answer_question(req.question, req.doc_name, results)
+    result = await answer_question(req.question, target_doc, results)
     response = result.to_dict()
     response["chunks_used"] = [
-        {"page_num": c.get("page_num"), "retrieval_score": c.get("retrieval_score")}
+        {
+            "chunk_idx": c.get("chunk_idx"),
+            "doc_name": c.get("doc_name"),
+            "company": c.get("company"),
+            "filing_type": c.get("filing_type"),
+            "fiscal_year": c.get("fiscal_year"),
+            "page_num": c.get("page_num"),
+            "statement_type": c.get("statement_type"),
+            "chunk_type": c.get("chunk_type"),
+            "content_evidence_score": c.get("content_evidence_score"),
+            "rerank_score": c.get("rerank_score"),
+            "concept_matched": c.get("concept_matched"),
+            "text_preview": (c.get("text") or "")[:200],
+        }
         for c in results
     ]
+
+    print("\n==================================================")
+    print("[FINAL RESPONSE] (Endpoint: /api/chat/sync)")
+    print(f"found: {response.get('found')}")
+    print(f"answer: {response.get('answer')}")
+    print(f"confidence: {response.get('confidence')}")
+    print(f"sources: {response.get('sources')}")
+    dbg = response.get("debug_info", {})
+    print(f"retrieval_status: {dbg.get('retrieval_status')}")
+    print("==================================================\n")
+
     return response
 
 
@@ -140,3 +203,4 @@ if FRONTEND_DIR.exists():
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
