@@ -11,3 +11,4 @@ eval_results.json
 *.log
 logs/*.jsonl
 env/
+data/huggingface_cache
