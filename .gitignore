@@ -12,3 +12,4 @@ eval_results.json
 logs/*.jsonl
 env/
 data/huggingface_cache
+*.py[cod]
