@@ -10,3 +10,6 @@ __pycache__/
 eval_results.json
 *.log
 env/
+
+# Claude Code runtime files
+.claude/
