@@ -1,10 +1,10 @@
 ﻿"""
-Per-filing hybrid retrieval: BM25 (primary) + FAISS dense (secondary, weak
-TF-IDF-hash embeddings), fused with Reciprocal Rank Fusion.
+Per-filing hybrid retrieval: BM25 (primary) + selected FAISS dense embeddings,
+fused with Reciprocal Rank Fusion.
 
 BM25 is the signal that actually knows financial vocabulary ("capital
-expenditure", "$1,577") token-for-token; the dense vectors here are cheap
-hash embeddings meant only to catch paraphrases BM25 misses, so RRF fusion
+expenditure", "$1,577") token-for-token; the dense vectors catch paraphrases
+BM25 misses, so RRF fusion
 (rather than a weighted score blend) keeps BM25's ranking dominant without
 needing to calibrate two incompatible score scales against each other.
 """
@@ -31,7 +31,7 @@ INDEX_DIR = Path(__file__).resolve().parent.parent / "data" / "indexes"
 
 _TOKEN_RE = re.compile(r"[a-z0-9$.,%]+")
 
-_INDEX_CACHE: Dict[str, "FilingIndex"] = {}
+_INDEX_CACHE: Dict[Tuple[str, str], "FilingIndex"] = {}
 DOC_ROUTING_THRESHOLD = 3.0
 
 # SEC filings use specific line-item wording ("Purchases of property, plant
@@ -151,7 +151,9 @@ def _candidate_metadata_text(c: Dict) -> str:
     parts = [
         c.get("section") or "",
         c.get("subsection") or "",
+        c.get("statement_title") or "",
         c.get("table_title") or "",
+        c.get("table_context") or "",
         c.get("statement_type") or "",
         c.get("chunk_type") or "",
         c.get("units") or "",
@@ -166,7 +168,9 @@ def _chunk_search_text(c: Dict) -> str:
     return " ".join([
         c.get("section") or "",
         c.get("subsection") or "",
+        c.get("statement_title") or "",
         c.get("table_title") or "",
+        c.get("table_context") or "",
         c.get("statement_type") or "",
         c.get("chunk_type") or "",
         c.get("units") or "",
@@ -313,7 +317,6 @@ def _rrf_fuse(weighted_ranked_lists: List[tuple], k: int = 60) -> Dict[int, floa
 
 
 from config import (
-    BGE_MODEL_NAME,
     BM25_TOP_K,
     SEMANTIC_TOP_K,
     RRF_K,
@@ -331,8 +334,9 @@ from config import (
     CROSS_ENCODER_MODEL_NAME,
     CROSS_ENCODER_CANDIDATE_K,
     CROSS_ENCODER_LOCAL_ONLY,
+    get_embedding_model_name,
 )
-from embedding_service import EmbeddingService, get_embedding_service
+from embedding_service import get_embedding_service
 from vector_store import FAISSVectorStore
 from query_analyzer import QueryAnalysis, analyze_query, expand_query, UNRELATED_TOPIC_KEYWORDS
 
@@ -368,8 +372,10 @@ def _cross_encoder_text(c: Dict) -> str:
         part for part in [
             f"Section: {c.get('section')}" if c.get("section") else "",
             f"Subsection: {c.get('subsection')}" if c.get("subsection") else "",
+            f"Statement Title: {c.get('statement_title')}" if c.get("statement_title") else "",
             f"Statement: {c.get('statement_type')}" if c.get("statement_type") else "",
             f"Table: {c.get('table_title')}" if c.get("table_title") else "",
+            f"Table Context: {c.get('table_context')}" if c.get("table_context") else "",
             f"Unit: {c.get('units')}" if c.get("units") else "",
             c.get("text") or "",
         ] if part
@@ -615,7 +621,7 @@ class FilingIndex:
         self.bm25 = BM25Okapi(tokenized) if tokenized else None
 
     def build_bge_faiss(self):
-        """Generate HuggingFace BGE embeddings for chunks and build FAISS vector store."""
+        """Generate selected-model embeddings for chunks and build FAISS vector store."""
         if not self.chunks:
             return
         try:
@@ -623,12 +629,22 @@ class FilingIndex:
             embed_svc = get_embedding_service()
             embeddings = embed_svc.embed_documents(texts)
             if embeddings is not None:
-                store = FAISSVectorStore(dim=embeddings.shape[1])
+                store = FAISSVectorStore(
+                    dim=embeddings.shape[1],
+                    embedding_model=embed_svc.key,
+                    model_name=embed_svc.model_name,
+                    similarity_metric=embed_svc.similarity_metric,
+                    filing_id=self.doc_name,
+                )
                 store.build_index(self.chunks, embeddings)
                 self.vector_store = store
                 self.set_vectors(embeddings)
+            else:
+                raise RuntimeError(f"No embeddings returned for EMBEDDING_MODEL={embed_svc.key}")
+        except RuntimeError:
+            raise
         except Exception as exc:
-            print(f"Warning: Failed to build BGE FAISS vector store: {exc}")
+            print(f"Warning: Failed to build selected embedding FAISS vector store: {exc}")
 
     def set_vectors(self, vectors: np.ndarray):
         """vectors: (n_chunks, dim) float32, normalized for cosine sim."""
@@ -713,7 +729,7 @@ class FilingIndex:
                 return []
             return self.vector_store.search(qv, top_k=top_k)
         except Exception as exc:
-            print(f"Warning: BGE FAISS query search failed: {exc}")
+            print(f"Warning: selected embedding FAISS query search failed: {exc}")
             return []
 
     def search_dense(self, query_vector: Optional[np.ndarray], top_k: int = SEMANTIC_TOP_K) -> List[int]:
@@ -741,6 +757,9 @@ class FilingIndex:
         if self.faiss_index is not None:
             return int(self.faiss_index.ntotal)
         return 0
+
+    def vector_index_dir(self) -> Path:
+        return INDEX_DIR / self.doc_name / get_embedding_model_name()
 
     def hybrid_search(
         self,
@@ -774,7 +793,7 @@ class FilingIndex:
         if not weighted_lists:
             if debug:
                 available_docs = list_indexed_docs()
-                faiss_dir = INDEX_DIR / self.doc_name
+                faiss_dir = self.vector_index_dir()
                 print("\n==================================================")
                 print("RETRIEVAL DOCUMENT SCOPE")
                 print("==================================================")
@@ -783,6 +802,7 @@ class FilingIndex:
                 print(f"Available documents: {available_docs}")
                 print(f"BM25 scope: {self.doc_name}")
                 print(f"FAISS scope: {self.doc_name}")
+                print(f"Embedding model: {get_embedding_model_name()}")
                 print(f"FAISS index: {faiss_dir}")
                 print(f"FAISS vectors: {self._faiss_vector_count()}")
                 print(f"Chunk count: {len(self.chunks)}")
@@ -822,7 +842,7 @@ class FilingIndex:
             table_cnt = sum(1 for c in self.chunks if c.get("chunk_type") == "table")
             text_cnt = len(self.chunks) - table_cnt
             available_docs = list_indexed_docs()
-            faiss_dir = INDEX_DIR / self.doc_name
+            faiss_dir = self.vector_index_dir()
             def _clean(t):
                 return t.encode("ascii", errors="replace").decode("ascii") if t else ""
 
@@ -834,6 +854,7 @@ class FilingIndex:
             print(f"Available documents: {available_docs}")
             print(f"BM25 scope: {self.doc_name}")
             print(f"FAISS scope: {self.doc_name}")
+            print(f"Embedding model: {get_embedding_model_name()}")
             print(f"FAISS index: {faiss_dir}")
             print(f"FAISS vectors: {self._faiss_vector_count()}")
             print(f"Chunk count: {len(self.chunks)} (Text: {text_cnt}, Tables: {table_cnt})")
@@ -949,10 +970,14 @@ class FilingIndex:
     def is_indexed(self) -> bool:
         return self.bm25 is not None and len(self.chunks) > 0
 
+    def has_vector_index(self) -> bool:
+        return self._faiss_vector_count() > 0
+
     # ---------------- persistence ----------------
 
     def save(self):
         out_dir = INDEX_DIR / self.doc_name
+        vector_dir = self.vector_index_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
 
         with open(out_dir / "chunks.json", "w", encoding="utf-8") as f:
@@ -965,10 +990,11 @@ class FilingIndex:
             pickle.dump(self.bm25, f)
 
         if self.vector_store is not None:
-            self.vector_store.save(out_dir)
+            self.vector_store.save(vector_dir)
 
         if self.vectors is not None:
-            np.save(out_dir / "vectors.npy", self.vectors)
+            vector_dir.mkdir(parents=True, exist_ok=True)
+            np.save(vector_dir / "vectors.npy", self.vectors)
 
     @classmethod
     def load(cls, doc_name: str) -> Optional["FilingIndex"]:
@@ -995,9 +1021,24 @@ class FilingIndex:
         with open(bm25_path, "rb") as f:
             idx.bm25 = pickle.load(f)
 
-        idx.vector_store = FAISSVectorStore.load(in_dir)
+        embedding_model = get_embedding_model_name()
+        vector_dir = in_dir / embedding_model
+        idx.vector_store = FAISSVectorStore.load(
+            vector_dir,
+            expected_embedding_model=embedding_model,
+            expected_filing_id=doc_name,
+        )
 
-        vectors_path = in_dir / "vectors.npy"
+        if idx.vector_store is None and embedding_model == "normal":
+            idx.vector_store = FAISSVectorStore.load(
+                in_dir,
+                expected_embedding_model=embedding_model,
+                expected_filing_id=doc_name,
+            )
+
+        vectors_path = vector_dir / "vectors.npy"
+        if not vectors_path.exists() and embedding_model == "normal":
+            vectors_path = in_dir / "vectors.npy"
         if vectors_path.exists():
             try:
                 vectors = np.load(vectors_path)
@@ -1009,20 +1050,21 @@ class FilingIndex:
 
 
 def get_index(doc_name: str) -> Optional[FilingIndex]:
-    if doc_name in _INDEX_CACHE:
-        return _INDEX_CACHE[doc_name]
+    cache_key = (get_embedding_model_name(), doc_name)
+    if cache_key in _INDEX_CACHE:
+        return _INDEX_CACHE[cache_key]
     idx = FilingIndex.load(doc_name)
     if idx is not None:
-        _INDEX_CACHE[doc_name] = idx
+        _INDEX_CACHE[cache_key] = idx
     return idx
 
 
 def register_index(doc_name: str, index: FilingIndex):
-    _INDEX_CACHE[doc_name] = index
+    _INDEX_CACHE[(get_embedding_model_name(), doc_name)] = index
 
 
 def list_indexed_docs() -> List[str]:
-    names = set(_INDEX_CACHE.keys())
+    names = {doc_name for _, doc_name in _INDEX_CACHE.keys()}
     if INDEX_DIR.exists():
         for p in INDEX_DIR.iterdir():
             if p.is_dir() and (p / "chunks.json").exists():

@@ -1,5 +1,5 @@
 """
-Groq LLM integration + a lightweight local embedding fallback.
+Groq LLM integration and answer generation.
 
 Two safety mechanisms matter more than anything else here, because the
 scoring rubric punishes a wrong answer (-1) far harder than it rewards a
@@ -13,7 +13,6 @@ right one (+1), while abstaining is always 0:
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -22,6 +21,8 @@ from typing import AsyncGenerator, Dict, List, Optional
 from pathlib import Path
 import httpx
 import numpy as np
+
+from embedding_service import get_embedding_provider
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -55,9 +56,6 @@ CONFIDENCE_THRESHOLD = 0.001
 
 # Hard cap per context passage sent to the LLM.
 MAX_PASSAGE_CHARS = 1400
-
-EMBED_DIM = 256
-_embed_cache: Dict[str, np.ndarray] = {}
 
 SYSTEM_PROMPT = """You are an expert financial analyst assistant.
 
@@ -225,27 +223,9 @@ class AnswerResult:
         }
 
 
-def get_embedding(text: str) -> np.ndarray:
-    """
-    Cheap hashed-TF-IDF-ish embedding: no Groq embedding endpoint exists,
-    so this is only meant to nudge dense search toward paraphrase matches
-    on top of BM25, not to be a strong semantic signal on its own.
-    """
-    key = hashlib.md5(text.encode("utf-8", errors="ignore")).hexdigest()
-    if key in _embed_cache:
-        return _embed_cache[key]
-
-    vec = np.zeros(EMBED_DIM, dtype="float32")
-    words = re.findall(r"[a-z0-9$%]+", text.lower())
-    if words:
-        for w in words:
-            h = int(hashlib.md5(w.encode("utf-8")).hexdigest(), 16)
-            bin_idx = h % EMBED_DIM
-            vec[bin_idx] += 1.0
-        vec = vec / (np.linalg.norm(vec) + 1e-9)
-
-    _embed_cache[key] = vec
-    return vec
+def get_embedding(text: str) -> Optional[np.ndarray]:
+    """Generate a query embedding with the selected embedding provider."""
+    return get_embedding_provider().embed_query(text)
 
 
 def _confidence_from_best_passage(chunks: List[Dict]) -> float:
@@ -314,9 +294,11 @@ def _format_context(chunks: List[Dict], max_chunks: int = 4) -> tuple:
         tag = "PRIMARY ANSWER-BEARING EVIDENCE" if i == 1 else "SUPPORTING CONTEXT"
         section = c.get("section") or ""
         subsection = c.get("subsection") or ""
+        statement_title = c.get("statement_title") or ""
         statement_type = c.get("statement_type") or ""
         chunk_type = c.get("chunk_type") or ""
         table_title = c.get("table_title") or ""
+        table_context = c.get("table_context") or ""
         units = c.get("units") or ""
 
         meta_parts = [tag, f"DOCUMENT: {doc_name}"]
@@ -330,12 +312,16 @@ def _format_context(chunks: List[Dict], max_chunks: int = 4) -> tuple:
             meta_parts.append(f"SECTION: {section}")
         if subsection:
             meta_parts.append(f"SUBSECTION: {subsection}")
+        if statement_title:
+            meta_parts.append(f"STATEMENT_TITLE: {statement_title}")
         if statement_type:
             meta_parts.append(f"STATEMENT: {statement_type}")
         if chunk_type:
             meta_parts.append(f"TYPE: {chunk_type}")
         if table_title:
             meta_parts.append(f"TABLE: {table_title}")
+        if table_context:
+            meta_parts.append(f"TABLE_CONTEXT: {table_context}")
         if units:
             meta_parts.append(f"UNIT: {units}")
         meta_parts.append(f"PAGE: {page}")
@@ -427,7 +413,9 @@ def _chunk_search_text(c: Dict) -> str:
     return " ".join([
         c.get("section") or "",
         c.get("subsection") or "",
+        c.get("statement_title") or "",
         c.get("table_title") or "",
+        c.get("table_context") or "",
         c.get("statement_type") or "",
         c.get("chunk_type") or "",
         c.get("units") or "",
@@ -770,6 +758,9 @@ async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> A
                 "doc_name": c.get("doc_name"),
                 "section": c.get("section"),
                 "subsection": c.get("subsection"),
+                "statement_title": c.get("statement_title"),
+                "table_title": c.get("table_title"),
+                "table_context": c.get("table_context"),
                 "page_num": c.get("page_num"),
                 "statement_type": c.get("statement_type"),
                 "chunk_type": c.get("chunk_type"),
@@ -895,6 +886,9 @@ async def stream_answer(question: str, doc_name: str, chunks: List[Dict]) -> Asy
                 "doc_name": c.get("doc_name"),
                 "section": c.get("section"),
                 "subsection": c.get("subsection"),
+                "statement_title": c.get("statement_title"),
+                "table_title": c.get("table_title"),
+                "table_context": c.get("table_context"),
                 "page_num": c.get("page_num"),
                 "statement_type": c.get("statement_type"),
                 "chunk_type": c.get("chunk_type"),

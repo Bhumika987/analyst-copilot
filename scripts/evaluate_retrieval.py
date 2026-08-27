@@ -13,8 +13,10 @@ Compares:
 4. BM25 + BGE + RRF + Structural Reranking
 """
 
+import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -25,7 +27,7 @@ if str(backend_dir) not in sys.path:
 
 from retrieval import FilingIndex, get_index, list_indexed_docs, _rrf_fuse, deterministic_rerank
 from query_analyzer import analyze_query, expand_query
-from config import BM25_TOP_K, SEMANTIC_TOP_K, RRF_K, RRF_TOP_K, RERANK_TOP_K
+from config import BM25_TOP_K, SEMANTIC_TOP_K, RRF_K, RRF_TOP_K, RERANK_TOP_K, get_embedding_model_name
 
 
 def dcg_at_k(relevances: List[int], k: int = 10) -> float:
@@ -170,6 +172,7 @@ def run_benchmark(jsonl_path: Path):
 
     print("===================================================================================")
     print(f"RETRIEVAL EVALUATION SUMMARY ({evaluated_cnt} Questions Evaluated)")
+    print(f"EMBEDDING MODEL: {get_embedding_model_name()}")
     print("===================================================================================")
     print(f"{'Retrieval Mode':<22} | {'Recall@5':<9} | {'Recall@10':<9} | {'Recall@20':<9} | {'MRR':<8} | {'nDCG@10':<8}")
     print("-----------------------------------------------------------------------------------")
@@ -189,5 +192,10 @@ def run_benchmark(jsonl_path: Path):
 
 
 if __name__ == "__main__":
-    benchmark_path = Path("C:/Users/Sakshi Sinha/Downloads/analyst-copilot-data 1/analyst-copilot-data/practice-questions.jsonl")
-    run_benchmark(benchmark_path)
+    parser = argparse.ArgumentParser(description="Evaluate retrieval over practice questions.")
+    parser.add_argument("--input", type=Path, default=Path("C:/Users/Sakshi Sinha/Downloads/analyst-copilot-data 1/analyst-copilot-data/practice-questions.jsonl"))
+    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
+    args = parser.parse_args()
+    if args.embedding_model:
+        os.environ["EMBEDDING_MODEL"] = args.embedding_model
+    run_benchmark(args.input)

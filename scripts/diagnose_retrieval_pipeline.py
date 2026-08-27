@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -7,7 +8,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from config import BM25_TOP_K, RERANK_TOP_K, RRF_K, RRF_TOP_K, SEMANTIC_TOP_K  # noqa: E402
+from config import BM25_TOP_K, RERANK_TOP_K, RRF_K, RRF_TOP_K, SEMANTIC_TOP_K, get_embedding_model_name  # noqa: E402
 from llm import _format_context, evaluate_retrieval_status  # noqa: E402
 from query_analyzer import analyze_query  # noqa: E402
 from retrieval import _rrf_fuse, deterministic_rerank, get_index  # noqa: E402
@@ -83,6 +84,8 @@ def diagnose(query: str, doc_name: str, top_k: int):
 
     print("QUERY:", query)
     print("TARGET DOCUMENT:", doc_name)
+    print("EMBEDDING MODEL:", get_embedding_model_name())
+    print("VECTOR INDEX:", idx.vector_index_dir())
     print("TOP-K SETTINGS:", {
         "BM25_TOP_K": BM25_TOP_K,
         "SEMANTIC_TOP_K": SEMANTIC_TOP_K,
@@ -164,7 +167,10 @@ def main():
     parser.add_argument("--doc", required=True, help="Indexed filing doc_name to inspect.")
     parser.add_argument("--query", required=True, help="Natural-language query to diagnose.")
     parser.add_argument("--top-k", type=int, default=RERANK_TOP_K, help="Final retrieval top_k before LLM context cap.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     args = parser.parse_args()
+    if args.embedding_model:
+        os.environ["EMBEDDING_MODEL"] = args.embedding_model
     diagnose(args.query, args.doc, args.top_k)
 
 

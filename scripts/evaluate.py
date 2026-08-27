@@ -16,6 +16,7 @@ Run from the project root:
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 from typing import Optional
@@ -28,6 +29,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from ingest import ingest_filing  # noqa: E402
 from llm import answer_question, get_embedding  # noqa: E402
 from retrieval import get_index, cross_filing_hybrid_search  # noqa: E402
+from config import get_embedding_model_name  # noqa: E402
 
 # ---- path constants ----
 DATA_ALT = Path(r"c:\Users\Sakshi Sinha\Downloads\analyst-copilot-data 1\analyst-copilot-data")
@@ -162,7 +164,7 @@ def load_questions(limit=None, doc_filter=None):
 
 async def ensure_indexed(doc_name: str, use_embeddings: bool):
     idx = get_index(doc_name)
-    if idx is not None and idx.is_indexed():
+    if idx is not None and idx.is_indexed() and (not use_embeddings or idx.has_vector_index()):
         return idx
 
     filepath = FILINGS_DIR / f"{doc_name}.htm"
@@ -174,9 +176,13 @@ async def ensure_indexed(doc_name: str, use_embeddings: bool):
     return await ingest_filing(str(filepath), doc_name, use_embeddings=use_embeddings)
 
 
-async def run_eval(limit, doc_filter, use_embeddings):
+async def run_eval(limit, doc_filter, use_embeddings, embedding_model_arg=None):
+    if embedding_model_arg:
+        os.environ["EMBEDDING_MODEL"] = embedding_model_arg
+    embedding_model = get_embedding_model_name()
     questions = load_questions(limit=limit, doc_filter=doc_filter)
     print(f"Loaded {len(questions)} practice questions.\n")
+    print(f"Embedding model: {embedding_model}\n")
 
     results = []
     score = 0
@@ -239,6 +245,8 @@ async def run_eval(limit, doc_filter, use_embeddings):
             "predicted_page": result.page_num,
             "predicted_evidence": result.evidence_text,
             "confidence": result.confidence,
+            "embedding_model": embedding_model,
+            "vector_index_path": str(index.vector_index_dir()) if use_embeddings else None,
             "reason": reason,
             "points": points,
             "error": result.error,
@@ -260,6 +268,7 @@ async def run_eval(limit, doc_filter, use_embeddings):
     with open(RESULTS_PATH, "w", encoding="utf-8") as f:
         json.dump({
             "summary": {
+                "embedding_model": embedding_model,
                 "total_scored": total_scored,
                 "skipped": counts["skipped"],
                 "plus_one": counts["+1"],
@@ -282,9 +291,10 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Only evaluate the first N questions.")
     parser.add_argument("--doc", type=str, default=None, help="Only evaluate questions for this doc_name.")
     parser.add_argument("--no-embed", action="store_true", help="Skip dense embeddings, BM25-only.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     args = parser.parse_args()
 
-    asyncio.run(run_eval(limit=args.limit, doc_filter=args.doc, use_embeddings=not args.no_embed))
+    asyncio.run(run_eval(limit=args.limit, doc_filter=args.doc, use_embeddings=not args.no_embed, embedding_model_arg=args.embedding_model))
 
 
 if __name__ == "__main__":

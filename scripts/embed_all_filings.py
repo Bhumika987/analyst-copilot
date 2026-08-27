@@ -15,6 +15,7 @@ Run from the project root:
 import argparse
 import asyncio
 import json
+import os
 import shutil
 import sys
 import time
@@ -27,6 +28,7 @@ BACKEND_DIR = PROJECT_ROOT / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from ingest import ingest_filing  # noqa: E402
+from config import get_embedding_model_name  # noqa: E402
 
 
 DEFAULT_SOURCE_DIR = Path(
@@ -44,6 +46,10 @@ def _filing_files(directory: Path) -> List[Path]:
         p for p in directory.iterdir()
         if p.is_file() and p.suffix.lower() in FILING_EXTENSIONS
     )
+
+
+def _vector_index_dir(indexes_dir: Path, doc_name: str, embedding_model: str) -> Path:
+    return indexes_dir / doc_name / embedding_model
 
 
 def _read_faiss_meta(index_dir: Path) -> Dict:
@@ -67,19 +73,25 @@ def _faiss_ntotal(index_dir: Path) -> Optional[int]:
         return None
 
 
-def is_embedded(indexes_dir: Path, doc_name: str) -> bool:
+def is_embedded(indexes_dir: Path, doc_name: str, embedding_model: str) -> bool:
     index_dir = indexes_dir / doc_name
     if not (index_dir / "chunks.json").exists() or not (index_dir / "bm25.pkl").exists():
         return False
 
-    meta = _read_faiss_meta(index_dir)
+    vector_dir = _vector_index_dir(indexes_dir, doc_name, embedding_model)
+    if embedding_model == "normal" and not (vector_dir / "faiss.index").exists():
+        vector_dir = index_dir
+
+    meta = _read_faiss_meta(vector_dir)
+    if meta.get("embedding_model") and meta.get("embedding_model") != embedding_model:
+        return False
     chunk_ids = meta.get("chunk_ids") or []
-    ntotal = _faiss_ntotal(index_dir)
+    ntotal = _faiss_ntotal(vector_dir)
     if ntotal is not None:
         return ntotal > 0 and len(chunk_ids) > 0
 
     # Fallback for environments where faiss cannot be imported during checks.
-    return (index_dir / "faiss.index").exists() and len(chunk_ids) > 0
+    return (vector_dir / "faiss.index").exists() and len(chunk_ids) > 0
 
 
 def copy_to_uploads(source_path: Path, uploads_dir: Path) -> Path:
@@ -91,6 +103,9 @@ def copy_to_uploads(source_path: Path, uploads_dir: Path) -> Path:
 
 
 async def embed_all(args) -> int:
+    if args.embedding_model:
+        os.environ["EMBEDDING_MODEL"] = args.embedding_model
+    embedding_model = get_embedding_model_name()
     source_files = _filing_files(args.source_dir)
     if args.only:
         wanted = {name.strip() for name in args.only.split(",") if name.strip()}
@@ -102,15 +117,16 @@ async def embed_all(args) -> int:
     args.indexes_dir.mkdir(parents=True, exist_ok=True)
 
     total = len(source_files)
-    embedded_before = sum(1 for p in source_files if is_embedded(args.indexes_dir, p.stem))
+    embedded_before = sum(1 for p in source_files if is_embedded(args.indexes_dir, p.stem, embedding_model))
     to_process = [
         p for p in source_files
-        if args.force or not is_embedded(args.indexes_dir, p.stem)
+        if args.force or not is_embedded(args.indexes_dir, p.stem, embedding_model)
     ]
 
     print("Embed All Filings")
     print("=================")
     print(f"Source dir: {args.source_dir}")
+    print(f"Embedding model: {embedding_model}")
     print(f"Source filings selected: {total}")
     print(f"Already embedded: {embedded_before}")
     print(f"Will process: {len(to_process)}")
@@ -140,6 +156,8 @@ async def embed_all(args) -> int:
             vector_count = 0
             if index.vector_store is not None and index.vector_store.index is not None:
                 vector_count = int(index.vector_store.index.ntotal)
+            if vector_count <= 0:
+                raise RuntimeError(f"No vectors written for EMBEDDING_MODEL={embedding_model}")
             elapsed = time.time() - item_start
             print(
                 f"  OK {doc_name}: chunks={len(index.chunks)} vectors={vector_count} elapsed={elapsed:.1f}s",
@@ -151,7 +169,7 @@ async def embed_all(args) -> int:
             failed.append({"doc_name": doc_name, "path": str(source_path), "error": str(exc)})
             print(f"  FAILED {doc_name}: {exc} elapsed={elapsed:.1f}s", flush=True)
 
-    final_embedded = sum(1 for p in _filing_files(args.source_dir) if is_embedded(args.indexes_dir, p.stem))
+    final_embedded = sum(1 for p in _filing_files(args.source_dir) if is_embedded(args.indexes_dir, p.stem, embedding_model))
     total_elapsed = time.time() - started
 
     print()
@@ -177,6 +195,7 @@ def main() -> None:
     parser.add_argument("--uploads-dir", type=Path, default=DEFAULT_UPLOADS_DIR)
     parser.add_argument("--indexes-dir", type=Path, default=DEFAULT_INDEXES_DIR)
     parser.add_argument("--force", action="store_true", help="Rebuild even if a FAISS index already exists.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     parser.add_argument("--no-copy", action="store_true", help="Do not copy source filings into data/uploads.")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be embedded without doing work.")
     parser.add_argument("--limit", type=int, default=0, help="Only process the first N selected filings.")

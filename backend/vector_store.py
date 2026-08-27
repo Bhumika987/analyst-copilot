@@ -21,10 +21,21 @@ logger = logging.getLogger(__name__)
 
 
 class FAISSVectorStore:
-    def __init__(self, dim: int = 384):
+    def __init__(
+        self,
+        dim: int = 384,
+        embedding_model: Optional[str] = None,
+        model_name: Optional[str] = None,
+        similarity_metric: str = "cosine",
+        filing_id: Optional[str] = None,
+    ):
         self.dim = dim
         self.index = None
         self.chunk_ids: List[int] = []
+        self.embedding_model = embedding_model
+        self.model_name = model_name
+        self.similarity_metric = similarity_metric
+        self.filing_id = filing_id
 
     def build_index(self, chunks: List[Dict], embeddings: Optional[np.ndarray]):
         """
@@ -86,10 +97,28 @@ class FAISSVectorStore:
         if self.index is not None and faiss is not None:
             faiss.write_index(self.index, str(directory / "faiss.index"))
         with open(directory / "faiss_meta.json", "w", encoding="utf-8") as f:
-            json.dump({"chunk_ids": self.chunk_ids, "dim": self.dim}, f, ensure_ascii=False)
+            json.dump(
+                {
+                    "filing_id": self.filing_id,
+                    "embedding_model": self.embedding_model,
+                    "model_name": self.model_name,
+                    "embedding_dimension": self.dim,
+                    "dim": self.dim,
+                    "similarity_metric": self.similarity_metric,
+                    "chunk_count": len(self.chunk_ids),
+                    "chunk_ids": self.chunk_ids,
+                },
+                f,
+                ensure_ascii=False,
+            )
 
     @classmethod
-    def load(cls, directory: Path) -> Optional["FAISSVectorStore"]:
+    def load(
+        cls,
+        directory: Path,
+        expected_embedding_model: Optional[str] = None,
+        expected_filing_id: Optional[str] = None,
+    ) -> Optional["FAISSVectorStore"]:
         """Load FAISS index and metadata mapping from disk directory."""
         index_path = directory / "faiss.index"
         meta_path = directory / "faiss_meta.json"
@@ -100,11 +129,26 @@ class FAISSVectorStore:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
 
-            store = cls(dim=meta.get("dim", 384))
+            index_embedding_model = meta.get("embedding_model")
+            if expected_embedding_model and index_embedding_model and index_embedding_model != expected_embedding_model:
+                raise ValueError(
+                    "Embedding model mismatch: "
+                    f"configured={expected_embedding_model} index={index_embedding_model}"
+                )
+
+            store = cls(
+                dim=meta.get("embedding_dimension", meta.get("dim", 384)),
+                embedding_model=index_embedding_model or expected_embedding_model,
+                model_name=meta.get("model_name"),
+                similarity_metric=meta.get("similarity_metric", "cosine"),
+                filing_id=meta.get("filing_id") or expected_filing_id,
+            )
             store.chunk_ids = meta.get("chunk_ids", [])
             store.index = faiss.read_index(str(index_path))
             logger.info(f"Loaded persistent FAISS index from {directory} with {store.index.ntotal} vectors.")
             return store
+        except ValueError:
+            raise
         except Exception as exc:
             logger.warning(f"Failed to load persistent FAISS index from {directory}: {exc}")
             return None
