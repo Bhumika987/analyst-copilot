@@ -2,7 +2,7 @@
 Scoring harness against practice-questions.jsonl.
 
 Mirrors the competition rubric exactly:
-  +1  correct answer, correct page (within +/- PAGE_TOLERANCE)
+  +1  correct answer, correct page (exact match)
    0  NOT_FOUND (abstained)
    0  correct answer, wrong/missing page
   -1  wrong answer (confidently stated, doesn't match the key)
@@ -44,7 +44,11 @@ if not FILINGS_DIR.exists() and (DATA_ALT / "filings").exists():
 RESULTS_PATH = SCRIPT_DIR.parent / "eval_results.json"
 
 
-PAGE_TOLERANCE = 5
+# The competition rubric scores page citations as exact-or-wrong (there is
+# no partial credit for "close"), so this must be 0. It was previously 5,
+# which silently absorbed a real off-by-one bug in the parser's page
+# attribution (see filing_parser.py) and inflated reported scores.
+PAGE_TOLERANCE = 0
 NUMBER_RE = re.compile(r"-?\$?\d[\d,]*\.?\d*%?")
 
 
@@ -201,15 +205,24 @@ async def run_eval(limit, doc_filter, use_embeddings, embedding_model_arg=None):
             counts["skipped"] += 1
             continue
 
+        # Match main.py's own default top_k (8) rather than a narrower
+        # ad hoc value -- calculation questions spanning two statements
+        # need the same retrieval depth the eval is supposed to grade
+        # against, not a tighter one that under-serves them by construction.
         query_vector = get_embedding(question_text) if use_embeddings else None
-        chunks = index.hybrid_search(question_text, query_vector, top_k=5)
+        chunks = index.hybrid_search(question_text, query_vector, top_k=8)
         result = await answer_question(question_text, doc_name, chunks)
 
         # Free-tier Groq keys share an ~8000-token/min budget across every
         # request; pace requests so a normal-sized call doesn't trip 429s
-        # that eat into the retry budget before it even starts.
-        if result.error is None:
-            await asyncio.sleep(2.0)
+        # that eat into the retry budget before it even starts. Pause after
+        # EVERY call, not just successes -- a rate-limit error means the
+        # per-minute window is already exhausted, so firing the next request
+        # immediately just cascades into another 429 (this previously left
+        # most of a run reporting NOT_FOUND for "rate limited" rather than
+        # a real evidence gap). Failures get a longer pause since the window
+        # that caused them needs more time to clear.
+        await asyncio.sleep(3.0 if result.error is None else 15.0)
 
         reason = None
         if not result.found:
@@ -291,7 +304,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Only evaluate the first N questions.")
     parser.add_argument("--doc", type=str, default=None, help="Only evaluate questions for this doc_name.")
     parser.add_argument("--no-embed", action="store_true", help="Skip dense embeddings, BM25-only.")
-    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang", "financesmall"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     args = parser.parse_args()
 
     asyncio.run(run_eval(limit=args.limit, doc_filter=args.doc, use_embeddings=not args.no_embed, embedding_model_arg=args.embedding_model))

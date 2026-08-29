@@ -9,7 +9,8 @@ from pathlib import Path
 BGE_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 NORMAL_EMBEDDING_MODEL_NAME = BGE_MODEL_NAME
 FINLANG_MODEL_NAME = "FinLang/finance-embeddings-investopedia"
-SUPPORTED_EMBEDDING_MODELS = {"normal", "finlang"}
+FINANCE_SMALL_MODEL_NAME = "baconnier/Finance_embedding_small_en-V1.5"
+SUPPORTED_EMBEDDING_MODELS = {"normal", "finlang", "financesmall"}
 DEFAULT_EMBEDDING_MODEL = "normal"
 
 
@@ -56,6 +57,15 @@ ENABLE_CROSS_ENCODER_RERANKER = True
 CROSS_ENCODER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 CROSS_ENCODER_CANDIDATE_K = 30
 CROSS_ENCODER_LOCAL_ONLY = True
+# The cross-encoder is a generic passage-relevance model with no notion of
+# "audited financial statement" vs. "narrative table that happens to share
+# vocabulary" -- it must refine the deterministic domain-aware ranking, not
+# replace it outright (that let a lay-phrased MD&A table like "Capital
+# Spending" outrank the actual Consolidated Statement of Cash Flows for a
+# query that explicitly asked for the cash flow statement). Its sigmoid
+# score is added to deterministic_rerank's rerank_score, scaled by this
+# weight, rather than used as the sole sort key.
+CROSS_ENCODER_BLEND_WEIGHT = 30.0
 
 # Generic Relevance Boost Weights
 CONCEPT_MATCH_BOOST = 35.0
@@ -63,9 +73,6 @@ YEAR_MATCH_BOOST = 15.0
 DUAL_AGREEMENT_BOOST = 20.0
 TABLE_CHUNK_BOOST = 25.0
 STATEMENT_TYPE_BOOST = 25.0
-
-# Evidence Sufficiency Thresholds
-MIN_CONTENT_EVIDENCE_SCORE = 25.0  # Content-only score required for SUFFICIENT_EVIDENCE
 
 # Contextual Chunk Expansion Settings
 NEIGHBOR_EXPANSION_ENABLED = True

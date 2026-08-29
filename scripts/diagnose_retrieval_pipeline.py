@@ -167,7 +167,7 @@ def main():
     parser.add_argument("--doc", required=True, help="Indexed filing doc_name to inspect.")
     parser.add_argument("--query", required=True, help="Natural-language query to diagnose.")
     parser.add_argument("--top-k", type=int, default=RERANK_TOP_K, help="Final retrieval top_k before LLM context cap.")
-    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang", "financesmall"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     args = parser.parse_args()
     if args.embedding_model:
         os.environ["EMBEDDING_MODEL"] = args.embedding_model

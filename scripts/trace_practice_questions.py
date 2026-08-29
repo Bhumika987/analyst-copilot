@@ -547,7 +547,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None, help="Only run the first N matching questions.")
     parser.add_argument("--doc", type=str, default=None, help="Only run questions for this doc_name.")
     parser.add_argument("--top-k", type=int, default=5, help="Number of final retrieved chunks to pass to the LLM.")
-    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang", "financesmall"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     parser.add_argument("--no-embed", action="store_true", help="Skip dense embedding retrieval.")
     parser.add_argument("--skip-llm", action="store_true", help="Trace retrieval only, without calling Groq.")
     parser.add_argument("--sleep-seconds", type=float, default=2.0, help="Delay between successful LLM calls to avoid rate limits.")

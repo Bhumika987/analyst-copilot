@@ -50,10 +50,6 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 # instruction-following on a task this constrained (quote-and-cite).
 REASONING_EFFORT = "low"
 
-# Below this retrieval score, the top chunk isn't strong enough evidence
-# to even bother asking the LLM. Lowered to avoid false-negative gating when valid hits are present.
-CONFIDENCE_THRESHOLD = 0.001
-
 # Hard cap per context passage sent to the LLM.
 MAX_PASSAGE_CHARS = 1400
 
@@ -136,6 +132,14 @@ STRICT GENERATION RULES:
    - provide the final result with the correct unit
 
    Do not introduce external numbers or assumptions.
+
+   If the deterministic evidence notes include a REQUIRED_RATIO_FORMULA line, the
+   question is naming a standard ratio or verdict framework (e.g. "quick ratio",
+   "capital-intensive") without spelling out its formula. Use that formula and
+   compute it from the underlying line items in the evidence -- do not say
+   NOT_FOUND just because the ratio itself is never stated as a single number in
+   the text, and do not answer a yes/no verdict question from raw dollar
+   magnitudes alone when a ratio formula is provided for it.
 
 9. NO HALLUCINATION
    Never invent:
@@ -549,7 +553,6 @@ def _parse_llm_output(text: str, top_chunk: Optional[Dict] = None, ret_status: s
     return res
 
 
-from config import MIN_CONTENT_EVIDENCE_SCORE
 from numerical_reasoner import extract_evidence_notes
 from query_analyzer import analyze_query, ACCOUNTING_CONCEPTS, UNRELATED_TOPIC_KEYWORDS
 

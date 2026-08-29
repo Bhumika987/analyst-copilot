@@ -194,7 +194,7 @@ def run_benchmark(jsonl_path: Path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate retrieval over practice questions.")
     parser.add_argument("--input", type=Path, default=Path("C:/Users/Sakshi Sinha/Downloads/analyst-copilot-data 1/analyst-copilot-data/practice-questions.jsonl"))
-    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang", "financesmall"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     args = parser.parse_args()
     if args.embedding_model:
         os.environ["EMBEDDING_MODEL"] = args.embedding_model

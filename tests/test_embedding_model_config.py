@@ -18,7 +18,12 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import embedding_service
 import retrieval
 import trace_practice_questions
-from config import FINLANG_MODEL_NAME, NORMAL_EMBEDDING_MODEL_NAME, get_embedding_model_name
+from config import (
+    FINANCE_SMALL_MODEL_NAME,
+    FINLANG_MODEL_NAME,
+    NORMAL_EMBEDDING_MODEL_NAME,
+    get_embedding_model_name,
+)
 from retrieval import FilingIndex
 from vector_store import FAISSVectorStore, faiss
 
@@ -45,6 +50,13 @@ class EmbeddingModelConfigTests(unittest.TestCase):
         self.assertEqual(get_embedding_model_name(), "finlang")
         self.assertIsInstance(embedding_service.get_embedding_provider(), embedding_service.FinLangEmbeddingProvider)
 
+    def test_env_configuration_selects_financesmall(self):
+        os.environ["EMBEDDING_MODEL"] = "financesmall"
+        self.assertEqual(get_embedding_model_name(), "financesmall")
+        self.assertIsInstance(
+            embedding_service.get_embedding_provider(), embedding_service.FinanceSmallEmbeddingProvider
+        )
+
     def test_normal_provider_uses_existing_model(self):
         provider = embedding_service.NormalEmbeddingProvider()
         self.assertEqual(provider.key, "normal")
@@ -56,6 +68,13 @@ class EmbeddingModelConfigTests(unittest.TestCase):
         provider = embedding_service.FinLangEmbeddingProvider()
         self.assertEqual(provider.key, "finlang")
         self.assertEqual(provider.model_name, FINLANG_MODEL_NAME)
+        self.assertEqual(provider._format_query("hello"), "hello")
+        self.assertEqual(provider._format_documents(["a", "b"]), ["a", "b"])
+
+    def test_financesmall_provider_loads_configured_model_without_prefixes(self):
+        provider = embedding_service.FinanceSmallEmbeddingProvider()
+        self.assertEqual(provider.key, "financesmall")
+        self.assertEqual(provider.model_name, FINANCE_SMALL_MODEL_NAME)
         self.assertEqual(provider._format_query("hello"), "hello")
         self.assertEqual(provider._format_documents(["a", "b"]), ["a", "b"])
 

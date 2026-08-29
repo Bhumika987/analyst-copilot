@@ -1,0 +1,397 @@
+QUERY: What is the FY2019 fixed asset turnover ratio for Activision Blizzard? Fixed asset turnover ratio is defined as: FY2019 revenue / (average PP&E between FY2018 and FY2019). Round your answer to two decimal places. Base your judgments on the information provided primarily in the statement of income and the statement of financial position.
+TARGET DOCUMENT: ACTIVISIONBLIZZARD_2019_10K
+EMBEDDING MODEL: normal
+VECTOR INDEX: C:\Users\Sakshi Sinha\Downloads\analyst-copilot\analyst-copilot\data\indexes\ACTIVISIONBLIZZARD_2019_10K\normal
+TOP-K SETTINGS: {'BM25_TOP_K': 50, 'SEMANTIC_TOP_K': 50, 'RRF_TOP_K': 80, 'RERANK_TOP_K': 12, 'requested_top_k': 12, 'LLM_CONTEXT_TOP_K': 4}
+RETRIEVAL STATUS: WEAK_EVIDENCE - Rule Failed [Calculation Inputs]: Missing required formula input evidence for PROPERTY_PLANT_EQUIPMENT_NET.
+
+BM25
+----
+ 1 | chunk=565  | score=92.0688 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Page: 61
+ 2 | chunk=475  | score=87.5693 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: P
+ 3 | chunk=474  | score=74.2703 | type=text | page=65 | Write-offs and impairments of capitalized software development costs and intellectual property licen
+ 4 | chunk=430  | score=54.6198 | type=text | page=65 | life of the asset, not to exceed the length of the lease, with interest expense associated with fina
+ 5 | chunk=425  | score=53.9373 | type=text | page=65 | in any given quarter, which could result in an impairment charge. Material differences may result in
+ 6 | chunk=399  | score=52.1622 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED BALANCE SHEETS | Statement: CONSOLI
+ 7 | chunk=402  | score=48.2428 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF OPERATIONS | Statemen
+ 8 | chunk=176  | score=45.7395 | type=table | page=36 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+ 9 | chunk=575  | score=40.7953 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Statemen
+10 | chunk=423  | score=38.8105 | type=text | page=65 | capitalized are charged immediately to "Product development." Commencing upon a product's release, c
+11 | chunk=275  | score=35.5926 | type=table | page=45 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+12 | chunk=500  | score=34.8990 | type=text | page=759 | and the ending balance as of December 31, 2019 , were $ 1.6 billion and $ 1.4 billion , respectively
+13 | chunk=422  | score=34.0208 | type=text | page=65 | based upon assumptions about future demand, which are inherently difficult to assess and dependent o
+14 | chunk=411  | score=33.8819 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Statemen
+15 | chunk=597  | score=33.1396 | type=text | page=76 | Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial Stateme
+16 | chunk=71   | score=32.3669 | type=text | page=15 | laws applicable to multinational companies like us, including an increasing number that have enacted
+17 | chunk=348  | score=32.3306 | type=text | page=54 | of intellectual property and rights to specified or unspecified future updates. Our estimate of the 
+18 | chunk=320  | score=32.2815 | type=text | page=49 | The increase was partially offset by lower net income in 2019 as compared to 2018 and a decrease in 
+19 | chunk=142  | score=31.5457 | type=text | page=31 | Since certain of our games are hosted online or include significant online functionality that repres
+20 | chunk=317  | score=31.0797 | type=text | page=49 | Net Cash Provided by Operating Activities The primary driver of net cash flows associated with our o
+21 | chunk=529  | score=30.9489 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: I
+22 | chunk=444  | score=30.4361 | type=text | page=65 | functionality are obtained through our continuous hosting of the game content for the player. In the
+23 | chunk=441  | score=30.3935 | type=text | page=65 | Certain products are sold to customers with a "street date" (which is the earliest date these produc
+24 | chunk=200  | score=30.1514 | type=table | page=39 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+25 | chunk=350  | score=30.0507 | type=text | page=55 | Table of Contents Revenues from the licensing of intellectual property other than software to third 
+26 | chunk=446  | score=30.0507 | type=text | page=65 | player action; accordingly, we recognize revenues from the sale of consumable virtual goods as the g
+27 | chunk=405  | score=29.6954 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF COMPREHENSIVE INCOME 
+28 | chunk=445  | score=29.6920 | type=text | page=65 | selling price is comprised of several factors including, but not limited to, prior selling prices, p
+29 | chunk=347  | score=29.1169 | type=text | page=54 | Table of Contents Online Hosted Software Arrangements For our online hosted software arrangements, s
+30 | chunk=424  | score=28.5601 | type=text | page=65 | costs relating to such contracts may extend beyond one year. We evaluate the future recoverability o
+31 | chunk=309  | score=28.5484 | type=text | page=47 | the ownership of these rights with our evolving business. The transfer did not result in a taxable g
+32 | chunk=442  | score=28.3848 | type=text | page=65 | recognized after deducting the estimated allowance for returns and price protection, which are accou
+33 | chunk=616  | score=28.2509 | type=table | page=7 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: A
+34 | chunk=619  | score=27.8693 | type=table | page=7 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Statemen
+35 | chunk=343  | score=27.7991 | type=text | page=52 | Certain products are sold to customers with a "street date" (which is the earliest date these produc
+36 | chunk=358  | score=27.7966 | type=text | page=57 | Table of Contents Software Development Costs Software development costs include payments made to ind
+37 | chunk=453  | score=27.5431 | type=text | page=65 | when cash payments are received or due in advance of our performance, even if amounts are refundable
+38 | chunk=296  | score=27.0174 | type=table | page=46 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+39 | chunk=560  | score=26.6290 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: T
+40 | chunk=599  | score=26.5860 | type=table | page=76 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: T
+41 | chunk=123  | score=26.4482 | type=table | page=29 | [Section: Item 6 - SELECTED FINANCIAL DATA | Table: December 31, 2019 | Context: Item 6. SELECTED FI
+42 | chunk=496  | score=26.4063 | type=table | page=759 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Statemen
+43 | chunk=531  | score=26.1611 | type=text | page=619 | F-36 Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial St
+44 | chunk=276  | score=26.1055 | type=text | page=45 | Cost of Revenues-Product Sales : The decrease in product costs for 2019, as compared to 2018, was du
+45 | chunk=346  | score=25.3723 | type=text | page=53 | may be sold in a bundle with other products and services, which often results in the recognition of 
+46 | chunk=421  | score=25.3426 | type=text | page=65 | worldwide. We perform ongoing credit evaluations of our customers and maintain allowances for potent
+47 | chunk=396  | score=25.2735 | type=text | page=65 | Table of Contents Valuation of Transferred Intellectual Property Rights That Give Rise to Deferred T
+48 | chunk=308  | score=24.6861 | type=text | page=47 | For the years ended December 31, 2019 and 2018, the Company's income before income tax expense was $
+49 | chunk=291  | score=24.3295 | type=table | page=46 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+50 | chunk=511  | score=24.3284 | type=text | page=346 | Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial Stateme
+
+FAISS
+-----
+ 1 | chunk=499  | score=0.7865 | type=text | page=759 | During the years ended December 31, 2019 , 2018 , and 2017 pre-tax net gains associated with these f
+ 2 | chunk=399  | score=0.7859 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED BALANCE SHEETS | Statement: CONSOLI
+ 3 | chunk=540  | score=0.7788 | type=text | page=619 | F-37 Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial St
+ 4 | chunk=532  | score=0.7758 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+ 5 | chunk=411  | score=0.7740 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Statemen
+ 6 | chunk=482  | score=0.7734 | type=text | page=759 | Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial Stateme
+ 7 | chunk=402  | score=0.7712 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF OPERATIONS | Statemen
+ 8 | chunk=556  | score=0.7711 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+ 9 | chunk=531  | score=0.7708 | type=text | page=619 | F-36 Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial St
+10 | chunk=558  | score=0.7696 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+11 | chunk=551  | score=0.7653 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+12 | chunk=291  | score=0.7647 | type=table | page=46 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+13 | chunk=549  | score=0.7647 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+14 | chunk=529  | score=0.7627 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: I
+15 | chunk=405  | score=0.7624 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF COMPREHENSIVE INCOME 
+16 | chunk=491  | score=0.7622 | type=table | page=759 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: F
+17 | chunk=599  | score=0.7618 | type=table | page=76 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: T
+18 | chunk=573  | score=0.7607 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+19 | chunk=541  | score=0.7604 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+20 | chunk=417  | score=0.7601 | type=text | page=65 | accompanying consolidated financial statements include the accounts and operations of the Company. A
+21 | chunk=543  | score=0.7593 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+22 | chunk=200  | score=0.7582 | type=table | page=39 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+23 | chunk=477  | score=0.7545 | type=text | page=130 | Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial Stateme
+24 | chunk=624  | score=0.7497 | type=text | page=7 | F-55 Table of Contents SCHEDULE II ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES VALUATION AND QUALIFYI
+25 | chunk=564  | score=0.7493 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: L
+26 | chunk=462  | score=0.7490 | type=text | page=65 | U.S. dollars at the exchange rate in effect at the balance sheet date, and revenue and expenses are 
+27 | chunk=566  | score=0.7478 | type=text | page=619 | For information regarding significant customers, see "Concentration of Credit Risk" in Note 2 . 16. 
+28 | chunk=625  | score=0.7468 | type=table | page=7 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: (
+29 | chunk=597  | score=0.7456 | type=text | page=76 | Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial Stateme
+30 | chunk=420  | score=0.7456 | type=text | page=65 | the underlying transactions. For foreign currency forward contracts which have been designated as ca
+31 | chunk=414  | score=0.7449 | type=text | page=65 | The accompanying notes are an integral part of these Consolidated Financial Statements. F-8 Table of
+32 | chunk=610  | score=0.7447 | type=text | page=1 | Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial Stateme
+33 | chunk=229  | score=0.7445 | type=table | page=41 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+34 | chunk=605  | score=0.7443 | type=text | page=76 | F-51 Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial St
+35 | chunk=572  | score=0.7435 | type=text | page=619 | The aggregate intrinsic values in the table above represents the total pretax intrinsic value (i.e.,
+36 | chunk=620  | score=0.7425 | type=text | page=7 | Subsequent to year-end, we entered into certain agreements, for which, under the terms, we have futu
+37 | chunk=459  | score=0.7425 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: N
+38 | chunk=555  | score=0.7424 | type=text | page=619 | The Company's net revenues in the U.S. were 46 % , 46 % , and 45 % of consolidated net revenues for 
+39 | chunk=511  | score=0.7411 | type=text | page=346 | Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial Stateme
+40 | chunk=490  | score=0.7410 | type=text | page=759 | F-27 Table of Contents ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES Notes to Consolidated Financial St
+41 | chunk=143  | score=0.7409 | type=table | page=31 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+42 | chunk=638  | score=0.7407 | type=table | page=7 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: A
+43 | chunk=20   | score=0.7403 | type=text | page=2 | Table of Contents PART I CAUTIONARY STATEMENT This Annual Report on Form 10-K contains, or incorpora
+44 | chunk=485  | score=0.7401 | type=table | page=759 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: T
+45 | chunk=584  | score=0.7394 | type=table | page=619 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: Y
+46 | chunk=185  | score=0.7381 | type=table | page=37 | [Section: Item 7 - MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERAT
+47 | chunk=116  | score=0.7379 | type=table | page=28 | [Section: Item 5 - MARKET FOR REGISTRANT'S COMMON EQUITY, RELATED STOCKHOLDER MATTERS, AND ISSUER PU
+48 | chunk=436  | score=0.7377 | type=table | page=65 | [Section: Item 16 - FORM 10-K SUMMARY | Subsection: CONSOLIDATED STATEMENTS OF CASH FLOWS | Table: W
+49 | chunk=586  | score=0.7376 | type=text | page=619 | During the year ended December 31, 2019, we also recorded $ 5 million to write-down inventory as a r
+50 | chunk=330  | score=0.7374 | type=text | page=51 | Refer to Note 13 of the notes to the consolidated financial statements included in Item 8 of this An
+
+METADATA
+--------
+(none)
+
+RRF ALL
+-------
+ 1 | chunk=399  | rrf=0.03128 | bm25_rank= 6 | metadata_rank= - | faiss_rank= 2
+ 2 | chunk=402  | rrf=0.02985 | bm25_rank= 7 | metadata_rank= - | faiss_rank= 7
+ 3 | chunk=411  | rrf=0.02890 | bm25_rank=14 | metadata_rank= - | faiss_rank= 5
+ 4 | chunk=529  | rrf=0.02586 | bm25_rank=21 | metadata_rank= - | faiss_rank=14
+ 5 | chunk=405  | rrf=0.02483 | bm25_rank=27 | metadata_rank= - | faiss_rank=15
+ 6 | chunk=597  | rrf=0.02457 | bm25_rank=15 | metadata_rank= - | faiss_rank=29
+ 7 | chunk=531  | rrf=0.02420 | bm25_rank=43 | metadata_rank= - | faiss_rank= 9
+ 8 | chunk=200  | rrf=0.02410 | bm25_rank=24 | metadata_rank= - | faiss_rank=22
+ 9 | chunk=291  | rrf=0.02306 | bm25_rank=49 | metadata_rank= - | faiss_rank=12
+10 | chunk=599  | rrf=0.02299 | bm25_rank=40 | metadata_rank= - | faiss_rank=17
+11 | chunk=511  | rrf=0.01919 | bm25_rank=50 | metadata_rank= - | faiss_rank=39
+12 | chunk=565  | rrf=0.01639 | bm25_rank= 1 | metadata_rank= - | faiss_rank= -
+13 | chunk=499  | rrf=0.01639 | bm25_rank= - | metadata_rank= - | faiss_rank= 1
+14 | chunk=475  | rrf=0.01613 | bm25_rank= 2 | metadata_rank= - | faiss_rank= -
+15 | chunk=474  | rrf=0.01587 | bm25_rank= 3 | metadata_rank= - | faiss_rank= -
+16 | chunk=540  | rrf=0.01587 | bm25_rank= - | metadata_rank= - | faiss_rank= 3
+17 | chunk=430  | rrf=0.01562 | bm25_rank= 4 | metadata_rank= - | faiss_rank= -
+18 | chunk=532  | rrf=0.01562 | bm25_rank= - | metadata_rank= - | faiss_rank= 4
+19 | chunk=425  | rrf=0.01538 | bm25_rank= 5 | metadata_rank= - | faiss_rank= -
+20 | chunk=482  | rrf=0.01515 | bm25_rank= - | metadata_rank= - | faiss_rank= 6
+21 | chunk=176  | rrf=0.01471 | bm25_rank= 8 | metadata_rank= - | faiss_rank= -
+22 | chunk=556  | rrf=0.01471 | bm25_rank= - | metadata_rank= - | faiss_rank= 8
+23 | chunk=575  | rrf=0.01449 | bm25_rank= 9 | metadata_rank= - | faiss_rank= -
+24 | chunk=423  | rrf=0.01429 | bm25_rank=10 | metadata_rank= - | faiss_rank= -
+25 | chunk=558  | rrf=0.01429 | bm25_rank= - | metadata_rank= - | faiss_rank=10
+26 | chunk=275  | rrf=0.01408 | bm25_rank=11 | metadata_rank= - | faiss_rank= -
+27 | chunk=551  | rrf=0.01408 | bm25_rank= - | metadata_rank= - | faiss_rank=11
+28 | chunk=500  | rrf=0.01389 | bm25_rank=12 | metadata_rank= - | faiss_rank= -
+29 | chunk=422  | rrf=0.01370 | bm25_rank=13 | metadata_rank= - | faiss_rank= -
+30 | chunk=549  | rrf=0.01370 | bm25_rank= - | metadata_rank= - | faiss_rank=13
+31 | chunk=71   | rrf=0.01316 | bm25_rank=16 | metadata_rank= - | faiss_rank= -
+32 | chunk=491  | rrf=0.01316 | bm25_rank= - | metadata_rank= - | faiss_rank=16
+33 | chunk=348  | rrf=0.01299 | bm25_rank=17 | metadata_rank= - | faiss_rank= -
+34 | chunk=320  | rrf=0.01282 | bm25_rank=18 | metadata_rank= - | faiss_rank= -
+35 | chunk=573  | rrf=0.01282 | bm25_rank= - | metadata_rank= - | faiss_rank=18
+36 | chunk=142  | rrf=0.01266 | bm25_rank=19 | metadata_rank= - | faiss_rank= -
+37 | chunk=541  | rrf=0.01266 | bm25_rank= - | metadata_rank= - | faiss_rank=19
+38 | chunk=317  | rrf=0.01250 | bm25_rank=20 | metadata_rank= - | faiss_rank= -
+39 | chunk=417  | rrf=0.01250 | bm25_rank= - | metadata_rank= - | faiss_rank=20
+40 | chunk=543  | rrf=0.01235 | bm25_rank= - | metadata_rank= - | faiss_rank=21
+41 | chunk=444  | rrf=0.01220 | bm25_rank=22 | metadata_rank= - | faiss_rank= -
+42 | chunk=441  | rrf=0.01205 | bm25_rank=23 | metadata_rank= - | faiss_rank= -
+43 | chunk=477  | rrf=0.01205 | bm25_rank= - | metadata_rank= - | faiss_rank=23
+44 | chunk=624  | rrf=0.01190 | bm25_rank= - | metadata_rank= - | faiss_rank=24
+45 | chunk=350  | rrf=0.01176 | bm25_rank=25 | metadata_rank= - | faiss_rank= -
+46 | chunk=564  | rrf=0.01176 | bm25_rank= - | metadata_rank= - | faiss_rank=25
+47 | chunk=446  | rrf=0.01163 | bm25_rank=26 | metadata_rank= - | faiss_rank= -
+48 | chunk=462  | rrf=0.01163 | bm25_rank= - | metadata_rank= - | faiss_rank=26
+49 | chunk=566  | rrf=0.01149 | bm25_rank= - | metadata_rank= - | faiss_rank=27
+50 | chunk=445  | rrf=0.01136 | bm25_rank=28 | metadata_rank= - | faiss_rank= -
+51 | chunk=625  | rrf=0.01136 | bm25_rank= - | metadata_rank= - | faiss_rank=28
+52 | chunk=347  | rrf=0.01124 | bm25_rank=29 | metadata_rank= - | faiss_rank= -
+53 | chunk=424  | rrf=0.01111 | bm25_rank=30 | metadata_rank= - | faiss_rank= -
+54 | chunk=420  | rrf=0.01111 | bm25_rank= - | metadata_rank= - | faiss_rank=30
+55 | chunk=309  | rrf=0.01099 | bm25_rank=31 | metadata_rank= - | faiss_rank= -
+56 | chunk=414  | rrf=0.01099 | bm25_rank= - | metadata_rank= - | faiss_rank=31
+57 | chunk=442  | rrf=0.01087 | bm25_rank=32 | metadata_rank= - | faiss_rank= -
+58 | chunk=610  | rrf=0.01087 | bm25_rank= - | metadata_rank= - | faiss_rank=32
+59 | chunk=616  | rrf=0.01075 | bm25_rank=33 | metadata_rank= - | faiss_rank= -
+60 | chunk=229  | rrf=0.01075 | bm25_rank= - | metadata_rank= - | faiss_rank=33
+61 | chunk=619  | rrf=0.01064 | bm25_rank=34 | metadata_rank= - | faiss_rank= -
+62 | chunk=605  | rrf=0.01064 | bm25_rank= - | metadata_rank= - | faiss_rank=34
+63 | chunk=343  | rrf=0.01053 | bm25_rank=35 | metadata_rank= - | faiss_rank= -
+64 | chunk=572  | rrf=0.01053 | bm25_rank= - | metadata_rank= - | faiss_rank=35
+65 | chunk=358  | rrf=0.01042 | bm25_rank=36 | metadata_rank= - | faiss_rank= -
+66 | chunk=620  | rrf=0.01042 | bm25_rank= - | metadata_rank= - | faiss_rank=36
+67 | chunk=453  | rrf=0.01031 | bm25_rank=37 | metadata_rank= - | faiss_rank= -
+68 | chunk=459  | rrf=0.01031 | bm25_rank= - | metadata_rank= - | faiss_rank=37
+69 | chunk=296  | rrf=0.01020 | bm25_rank=38 | metadata_rank= - | faiss_rank= -
+70 | chunk=555  | rrf=0.01020 | bm25_rank= - | metadata_rank= - | faiss_rank=38
+71 | chunk=560  | rrf=0.01010 | bm25_rank=39 | metadata_rank= - | faiss_rank= -
+72 | chunk=490  | rrf=0.01000 | bm25_rank= - | metadata_rank= - | faiss_rank=40
+73 | chunk=123  | rrf=0.00990 | bm25_rank=41 | metadata_rank= - | faiss_rank= -
+74 | chunk=143  | rrf=0.00990 | bm25_rank= - | metadata_rank= - | faiss_rank=41
+75 | chunk=496  | rrf=0.00980 | bm25_rank=42 | metadata_rank= - | faiss_rank= -
+76 | chunk=638  | rrf=0.00980 | bm25_rank= - | metadata_rank= - | faiss_rank=42
+77 | chunk=20   | rrf=0.00971 | bm25_rank= - | metadata_rank= - | faiss_rank=43
+78 | chunk=276  | rrf=0.00962 | bm25_rank=44 | metadata_rank= - | faiss_rank= -
+79 | chunk=485  | rrf=0.00962 | bm25_rank= - | metadata_rank= - | faiss_rank=44
+80 | chunk=346  | rrf=0.00952 | bm25_rank=45 | metadata_rank= - | faiss_rank= -
+81 | chunk=584  | rrf=0.00952 | bm25_rank= - | metadata_rank= - | faiss_rank=45
+82 | chunk=421  | rrf=0.00943 | bm25_rank=46 | metadata_rank= - | faiss_rank= -
+83 | chunk=185  | rrf=0.00943 | bm25_rank= - | metadata_rank= - | faiss_rank=46
+84 | chunk=396  | rrf=0.00935 | bm25_rank=47 | metadata_rank= - | faiss_rank= -
+85 | chunk=116  | rrf=0.00935 | bm25_rank= - | metadata_rank= - | faiss_rank=47
+86 | chunk=308  | rrf=0.00926 | bm25_rank=48 | metadata_rank= - | faiss_rank= -
+87 | chunk=436  | rrf=0.00926 | bm25_rank= - | metadata_rank= - | faiss_rank=48
+88 | chunk=586  | rrf=0.00917 | bm25_rank= - | metadata_rank= - | faiss_rank=49
+89 | chunk=330  | rrf=0.00909 | bm25_rank= - | metadata_rank= - | faiss_rank=50
+
+RERANK
+------
+ 1 | chunk=200  | score=297.41 | rrf=0.02410 | bm25_rank=24 | metadata_rank= - | faiss_rank=22 | type=table | page=39
+ 2 | chunk=291  | score=262.31 | rrf=0.02306 | bm25_rank=49 | metadata_rank= - | faiss_rank=12 | type=table | page=46
+ 3 | chunk=275  | score=241.41 | rrf=0.01408 | bm25_rank=11 | metadata_rank= - | faiss_rank= - | type=table | page=45
+ 4 | chunk=229  | score=241.08 | rrf=0.01075 | bm25_rank= - | metadata_rank= - | faiss_rank=33 | type=table | page=41
+ 5 | chunk=296  | score=241.02 | rrf=0.01020 | bm25_rank=38 | metadata_rank= - | faiss_rank= - | type=table | page=46
+ 6 | chunk=123  | score=240.99 | rrf=0.00990 | bm25_rank=41 | metadata_rank= - | faiss_rank= - | type=table | page=29
+ 7 | chunk=143  | score=240.99 | rrf=0.00990 | bm25_rank= - | metadata_rank= - | faiss_rank=41 | type=table | page=31
+ 8 | chunk=496  | score=240.98 | rrf=0.00980 | bm25_rank=42 | metadata_rank= - | faiss_rank= - | type=table | page=759
+ 9 | chunk=402  | score=237.99 | rrf=0.02985 | bm25_rank= 7 | metadata_rank= - | faiss_rank= 7 | type=table | page=65
+10 | chunk=348  | score=221.30 | rrf=0.01299 | bm25_rank=17 | metadata_rank= - | faiss_rank= - | type=text | page=54
+11 | chunk=176  | score=216.47 | rrf=0.01471 | bm25_rank= 8 | metadata_rank= - | faiss_rank= - | type=table | page=36
+12 | chunk=575  | score=216.45 | rrf=0.01449 | bm25_rank= 9 | metadata_rank= - | faiss_rank= - | type=table | page=619
+13 | chunk=399  | score=213.13 | rrf=0.03128 | bm25_rank= 6 | metadata_rank= - | faiss_rank= 2 | type=table | page=65
+14 | chunk=411  | score=212.89 | rrf=0.02890 | bm25_rank=14 | metadata_rank= - | faiss_rank= 5 | type=table | page=65
+15 | chunk=529  | score=202.59 | rrf=0.02586 | bm25_rank=21 | metadata_rank= - | faiss_rank=14 | type=table | page=619
+16 | chunk=599  | score=202.30 | rrf=0.02299 | bm25_rank=40 | metadata_rank= - | faiss_rank=17 | type=table | page=76
+17 | chunk=350  | score=196.18 | rrf=0.01176 | bm25_rank=25 | metadata_rank= - | faiss_rank= - | type=text | page=55
+18 | chunk=347  | score=196.12 | rrf=0.01124 | bm25_rank=29 | metadata_rank= - | faiss_rank= - | type=text | page=54
+19 | chunk=499  | score=191.64 | rrf=0.01639 | bm25_rank= - | metadata_rank= - | faiss_rank= 1 | type=text | page=759
+20 | chunk=532  | score=191.56 | rrf=0.01562 | bm25_rank= - | metadata_rank= - | faiss_rank= 4 | type=table | page=619
+21 | chunk=556  | score=181.47 | rrf=0.01471 | bm25_rank= - | metadata_rank= - | faiss_rank= 8 | type=table | page=619
+22 | chunk=558  | score=181.43 | rrf=0.01429 | bm25_rank= - | metadata_rank= - | faiss_rank=10 | type=table | page=619
+23 | chunk=551  | score=181.41 | rrf=0.01408 | bm25_rank= - | metadata_rank= - | faiss_rank=11 | type=table | page=619
+24 | chunk=549  | score=181.37 | rrf=0.01370 | bm25_rank= - | metadata_rank= - | faiss_rank=13 | type=table | page=619
+25 | chunk=142  | score=181.27 | rrf=0.01266 | bm25_rank=19 | metadata_rank= - | faiss_rank= - | type=text | page=31
+26 | chunk=541  | score=181.27 | rrf=0.01266 | bm25_rank= - | metadata_rank= - | faiss_rank=19 | type=table | page=619
+27 | chunk=543  | score=181.23 | rrf=0.01235 | bm25_rank= - | metadata_rank= - | faiss_rank=21 | type=table | page=619
+28 | chunk=625  | score=181.14 | rrf=0.01136 | bm25_rank= - | metadata_rank= - | faiss_rank=28 | type=table | page=7
+29 | chunk=276  | score=180.96 | rrf=0.00962 | bm25_rank=44 | metadata_rank= - | faiss_rank= - | type=text | page=45
+30 | chunk=358  | score=176.04 | rrf=0.01042 | bm25_rank=36 | metadata_rank= - | faiss_rank= - | type=text | page=57
+31 | chunk=343  | score=161.05 | rrf=0.01053 | bm25_rank=35 | metadata_rank= - | faiss_rank= - | type=text | page=52
+32 | chunk=459  | score=161.03 | rrf=0.01031 | bm25_rank= - | metadata_rank= - | faiss_rank=37 | type=table | page=65
+33 | chunk=346  | score=160.95 | rrf=0.00952 | bm25_rank=45 | metadata_rank= - | faiss_rank= - | type=text | page=53
+34 | chunk=441  | score=155.20 | rrf=0.01205 | bm25_rank=23 | metadata_rank= - | faiss_rank= - | type=text | page=65
+35 | chunk=445  | score=155.14 | rrf=0.01136 | bm25_rank=28 | metadata_rank= - | faiss_rank= - | type=text | page=65
+36 | chunk=597  | score=152.46 | rrf=0.02457 | bm25_rank=15 | metadata_rank= - | faiss_rank=29 | type=text | page=76
+37 | chunk=560  | score=149.01 | rrf=0.01010 | bm25_rank=39 | metadata_rank= - | faiss_rank= - | type=table | page=619
+38 | chunk=423  | score=136.43 | rrf=0.01429 | bm25_rank=10 | metadata_rank= - | faiss_rank= - | type=text | page=65
+39 | chunk=422  | score=136.37 | rrf=0.01370 | bm25_rank=13 | metadata_rank= - | faiss_rank= - | type=text | page=65
+40 | chunk=462  | score=136.16 | rrf=0.01163 | bm25_rank= - | metadata_rank= - | faiss_rank=26 | type=text | page=65
+41 | chunk=442  | score=136.09 | rrf=0.01087 | bm25_rank=32 | metadata_rank= - | faiss_rank= - | type=text | page=65
+42 | chunk=20   | score=131.97 | rrf=0.00971 | bm25_rank= - | metadata_rank= - | faiss_rank=43 | type=text | page=2
+43 | chunk=420  | score=131.11 | rrf=0.01111 | bm25_rank= - | metadata_rank= - | faiss_rank=30 | type=text | page=65
+44 | chunk=414  | score=119.10 | rrf=0.01099 | bm25_rank= - | metadata_rank= - | faiss_rank=31 | type=text | page=65
+45 | chunk=540  | score=115.59 | rrf=0.01587 | bm25_rank= - | metadata_rank= - | faiss_rank= 3 | type=text | page=619
+46 | chunk=555  | score=115.02 | rrf=0.01020 | bm25_rank= - | metadata_rank= - | faiss_rank=38 | type=text | page=619
+47 | chunk=444  | score=99.22 | rrf=0.01220 | bm25_rank=22 | metadata_rank= - | faiss_rank= - | type=text | page=65
+48 | chunk=446  | score=97.16 | rrf=0.01163 | bm25_rank=26 | metadata_rank= - | faiss_rank= - | type=text | page=65
+49 | chunk=453  | score=97.03 | rrf=0.01031 | bm25_rank=37 | metadata_rank= - | faiss_rank= - | type=text | page=65
+50 | chunk=619  | score=96.06 | rrf=0.01064 | bm25_rank=34 | metadata_rank= - | faiss_rank= - | type=table | page=7
+51 | chunk=531  | score=93.42 | rrf=0.02420 | bm25_rank=43 | metadata_rank= - | faiss_rank= 9 | type=text | page=619
+52 | chunk=430  | score=88.56 | rrf=0.01562 | bm25_rank= 4 | metadata_rank= - | faiss_rank= - | type=text | page=65
+53 | chunk=500  | score=88.39 | rrf=0.01389 | bm25_rank=12 | metadata_rank= - | faiss_rank= - | type=text | page=759
+54 | chunk=320  | score=81.28 | rrf=0.01282 | bm25_rank=18 | metadata_rank= - | faiss_rank= - | type=text | page=49
+55 | chunk=317  | score=81.25 | rrf=0.01250 | bm25_rank=20 | metadata_rank= - | faiss_rank= - | type=text | page=49
+56 | chunk=424  | score=73.11 | rrf=0.01111 | bm25_rank=30 | metadata_rank= - | faiss_rank= - | type=text | page=65
+57 | chunk=565  | score=61.64 | rrf=0.01639 | bm25_rank= 1 | metadata_rank= - | faiss_rank= - | type=table | page=619
+58 | chunk=573  | score=61.28 | rrf=0.01282 | bm25_rank= - | metadata_rank= - | faiss_rank=18 | type=table | page=619
+59 | chunk=564  | score=61.18 | rrf=0.01176 | bm25_rank= - | metadata_rank= - | faiss_rank=25 | type=table | page=619
+60 | chunk=485  | score=60.96 | rrf=0.00962 | bm25_rank= - | metadata_rank= - | faiss_rank=44 | type=table | page=759
+61 | chunk=309  | score=56.10 | rrf=0.01099 | bm25_rank=31 | metadata_rank= - | faiss_rank= - | type=text | page=47
+62 | chunk=475  | score=49.61 | rrf=0.01613 | bm25_rank= 2 | metadata_rank= - | faiss_rank= - | type=table | page=65
+63 | chunk=616  | score=49.08 | rrf=0.01075 | bm25_rank=33 | metadata_rank= - | faiss_rank= - | type=table | page=7
+64 | chunk=511  | score=41.92 | rrf=0.01919 | bm25_rank=50 | metadata_rank= - | faiss_rank=39 | type=text | page=346
+65 | chunk=638  | score=40.98 | rrf=0.00980 | bm25_rank= - | metadata_rank= - | faiss_rank=42 | type=table | page=7
+66 | chunk=405  | score=37.48 | rrf=0.02483 | bm25_rank=27 | metadata_rank= - | faiss_rank=15 | type=table | page=65
+67 | chunk=491  | score=36.32 | rrf=0.01316 | bm25_rank= - | metadata_rank= - | faiss_rank=16 | type=table | page=759
+68 | chunk=425  | score=21.54 | rrf=0.01538 | bm25_rank= 5 | metadata_rank= - | faiss_rank= - | type=text | page=65
+69 | chunk=71   | score=21.32 | rrf=0.01316 | bm25_rank=16 | metadata_rank= - | faiss_rank= - | type=text | page=15
+70 | chunk=605  | score=21.06 | rrf=0.01064 | bm25_rank= - | metadata_rank= - | faiss_rank=34 | type=text | page=76
+71 | chunk=572  | score=21.05 | rrf=0.01053 | bm25_rank= - | metadata_rank= - | faiss_rank=35 | type=text | page=619
+72 | chunk=620  | score=21.04 | rrf=0.01042 | bm25_rank= - | metadata_rank= - | faiss_rank=36 | type=text | page=7
+73 | chunk=482  | score=17.52 | rrf=0.01515 | bm25_rank= - | metadata_rank= - | faiss_rank= 6 | type=text | page=759
+74 | chunk=610  | score=17.09 | rrf=0.01087 | bm25_rank= - | metadata_rank= - | faiss_rank=32 | type=text | page=1
+75 | chunk=474  | score=7.59 | rrf=0.01587 | bm25_rank= 3 | metadata_rank= - | faiss_rank= - | type=text | page=65
+76 | chunk=477  | score=-2.80 | rrf=0.01205 | bm25_rank= - | metadata_rank= - | faiss_rank=23 | type=text | page=130
+77 | chunk=566  | score=-2.85 | rrf=0.01149 | bm25_rank= - | metadata_rank= - | faiss_rank=27 | type=text | page=619
+78 | chunk=417  | score=-3.75 | rrf=0.01250 | bm25_rank= - | metadata_rank= - | faiss_rank=20 | type=text | page=65
+79 | chunk=624  | score=-8.81 | rrf=0.01190 | bm25_rank= - | metadata_rank= - | faiss_rank=24 | type=text | page=7
+80 | chunk=490  | score=-26.00 | rrf=0.01000 | bm25_rank= - | metadata_rank= - | faiss_rank=40 | type=text | page=759
+
+FINAL CONTEXT
+-------------
+ 1 | chunk=402  | page=65 | type=table
+ 2 | chunk=200  | page=39 | type=table
+ 3 | chunk=291  | page=46 | type=table
+ 4 | chunk=176  | page=36 | type=table
+
+BM25 -> RRF ALL DROPPED
+-----------------------
+(none)
+
+RRF ALL -> RRF TOP-K DROPPED
+----------------------------
+chunk=584
+chunk=421
+chunk=185
+chunk=396
+chunk=116
+chunk=308
+chunk=436
+chunk=586
+chunk=330
+
+RRF TOP-K -> RERANK DROPPED
+---------------------------
+(none)
+
+RERANK -> LLM CONTEXT DROPPED
+-----------------------------
+chunk=275
+chunk=229
+chunk=296
+chunk=123
+chunk=143
+chunk=496
+chunk=348
+chunk=575
+chunk=399
+chunk=411
+chunk=529
+chunk=599
+chunk=350
+chunk=347
+chunk=499
+chunk=532
+chunk=556
+chunk=558
+chunk=551
+chunk=549
+chunk=142
+chunk=541
+chunk=543
+chunk=625
+chunk=276
+chunk=358
+chunk=343
+chunk=459
+chunk=346
+chunk=441
+chunk=445
+chunk=597
+chunk=560
+chunk=423
+chunk=422
+chunk=462
+chunk=442
+chunk=20
+chunk=420
+chunk=414
+chunk=540
+chunk=555
+chunk=444
+chunk=446
+chunk=453
+chunk=619
+chunk=531
+chunk=430
+chunk=500
+chunk=320
+chunk=317
+chunk=424
+chunk=565
+chunk=573
+chunk=564
+chunk=485
+chunk=309
+chunk=475
+chunk=616
+chunk=511
+chunk=638
+chunk=405
+chunk=491
+chunk=425
+chunk=71
+chunk=605
+chunk=572
+chunk=620
+chunk=482
+chunk=610
+chunk=474
+chunk=477
+chunk=566
+chunk=417
+chunk=624
+chunk=490

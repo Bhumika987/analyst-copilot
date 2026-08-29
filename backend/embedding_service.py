@@ -4,6 +4,7 @@ Configurable embedding providers for SEC filing retrieval.
 The selected provider is controlled by EMBEDDING_MODEL:
   - normal: existing BAAI/bge-small-en-v1.5 behavior
   - finlang: FinLang/finance-embeddings-investopedia
+  - financesmall: baconnier/Finance_embedding_small_en-V1.5
 """
 
 import logging
@@ -12,6 +13,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from config import (
+    FINANCE_SMALL_MODEL_NAME,
     FINLANG_MODEL_NAME,
     NORMAL_EMBEDDING_MODEL_NAME,
     get_embedding_model_name,
@@ -132,6 +134,14 @@ class FinLangEmbeddingProvider(SentenceTransformerEmbeddingProvider):
         super().__init__(FINLANG_MODEL_NAME)
 
 
+class FinanceSmallEmbeddingProvider(SentenceTransformerEmbeddingProvider):
+    key = "financesmall"
+    strict_load = True
+
+    def __init__(self):
+        super().__init__(FINANCE_SMALL_MODEL_NAME)
+
+
 _PROVIDER_CACHE: Dict[str, EmbeddingProvider] = {}
 
 
@@ -142,6 +152,8 @@ def get_embedding_provider(embedding_model: Optional[str] = None) -> EmbeddingPr
             _PROVIDER_CACHE[selected] = NormalEmbeddingProvider()
         elif selected == "finlang":
             _PROVIDER_CACHE[selected] = FinLangEmbeddingProvider()
+        elif selected == "financesmall":
+            _PROVIDER_CACHE[selected] = FinanceSmallEmbeddingProvider()
         else:
             raise ValueError(f"Unsupported EMBEDDING_MODEL={selected!r}")
     return _PROVIDER_CACHE[selected]

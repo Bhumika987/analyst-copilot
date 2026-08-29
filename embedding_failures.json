@@ -1,0 +1,27 @@
+[
+  {
+    "doc_name": "3M_2018_10K",
+    "path": "C:\\Users\\Sakshi Sinha\\Downloads\\analyst-copilot-data 1\\analyst-copilot-data\\filings\\3M_2018_10K.htm",
+    "error": "Failed to load configured embedding model 'baconnier/Finance_embedding_small_en-V1.5' for EMBEDDING_MODEL=financesmall: 401 Client Error. (Request ID: Root=1-6a91d051-0674bb231fc0cd0f4aeb9beb;202592d2-df1c-409d-b497-4b65301a9681)\n\nCannot access gated repo for url https://huggingface.co/baconnier/Finance_embedding_small_en-V1.5/resolve/main/modules.json.\nAccess to model baconnier/Finance_embedding_small_en-V1.5 is restricted. You must have access to it and be authenticated to access it. Please log in."
+  },
+  {
+    "doc_name": "3M_2022_10K",
+    "path": "C:\\Users\\Sakshi Sinha\\Downloads\\analyst-copilot-data 1\\analyst-copilot-data\\filings\\3M_2022_10K.htm",
+    "error": "Failed to load configured embedding model 'baconnier/Finance_embedding_small_en-V1.5' for EMBEDDING_MODEL=financesmall: 401 Client Error. (Request ID: Root=1-6a91d054-016f36d379615dc97542585c;ba37fdbc-7351-42be-a365-58d3443d2c3c)\n\nCannot access gated repo for url https://huggingface.co/baconnier/Finance_embedding_small_en-V1.5/resolve/main/modules.json.\nAccess to model baconnier/Finance_embedding_small_en-V1.5 is restricted. You must have access to it and be authenticated to access it. Please log in."
+  },
+  {
+    "doc_name": "3M_2023Q2_10Q",
+    "path": "C:\\Users\\Sakshi Sinha\\Downloads\\analyst-copilot-data 1\\analyst-copilot-data\\filings\\3M_2023Q2_10Q.htm",
+    "error": "Failed to load configured embedding model 'baconnier/Finance_embedding_small_en-V1.5' for EMBEDDING_MODEL=financesmall: 401 Client Error. (Request ID: Root=1-6a91d055-3e1f4b0a72e15d8e72d62b3c;0cac1f88-0d36-4ce5-906e-a84332bfba6a)\n\nCannot access gated repo for url https://huggingface.co/baconnier/Finance_embedding_small_en-V1.5/resolve/main/modules.json.\nAccess to model baconnier/Finance_embedding_small_en-V1.5 is restricted. You must have access to it and be authenticated to access it. Please log in."
+  },
+  {
+    "doc_name": "ACTIVISIONBLIZZARD_2019_10K",
+    "path": "C:\\Users\\Sakshi Sinha\\Downloads\\analyst-copilot-data 1\\analyst-copilot-data\\filings\\ACTIVISIONBLIZZARD_2019_10K.htm",
+    "error": "Failed to load configured embedding model 'baconnier/Finance_embedding_small_en-V1.5' for EMBEDDING_MODEL=financesmall: 401 Client Error. (Request ID: Root=1-6a91d058-46eb95fa622486d25121a552;2f46a33c-1580-43a9-8758-d9cdcb8e747c)\n\nCannot access gated repo for url https://huggingface.co/baconnier/Finance_embedding_small_en-V1.5/resolve/main/modules.json.\nAccess to model baconnier/Finance_embedding_small_en-V1.5 is restricted. You must have access to it and be authenticated to access it. Please log in."
+  },
+  {
+    "doc_name": "ADOBE_2015_10K",
+    "path": "C:\\Users\\Sakshi Sinha\\Downloads\\analyst-copilot-data 1\\analyst-copilot-data\\filings\\ADOBE_2015_10K.htm",
+    "error": "Failed to load configured embedding model 'baconnier/Finance_embedding_small_en-V1.5' for EMBEDDING_MODEL=financesmall: 401 Client Error. (Request ID: Root=1-6a91d05b-7e0250ff6e9eec87672f6d74;cbe6d3bc-d115-46cb-8ba1-f05c38c866e1)\n\nCannot access gated repo for url https://huggingface.co/baconnier/Finance_embedding_small_en-V1.5/resolve/main/modules.json.\nAccess to model baconnier/Finance_embedding_small_en-V1.5 is restricted. You must have access to it and be authenticated to access it. Please log in."
+  }
+]

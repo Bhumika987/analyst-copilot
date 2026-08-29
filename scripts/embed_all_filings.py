@@ -195,7 +195,7 @@ def main() -> None:
     parser.add_argument("--uploads-dir", type=Path, default=DEFAULT_UPLOADS_DIR)
     parser.add_argument("--indexes-dir", type=Path, default=DEFAULT_INDEXES_DIR)
     parser.add_argument("--force", action="store_true", help="Rebuild even if a FAISS index already exists.")
-    parser.add_argument("--embedding-model", choices=["normal", "finlang"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
+    parser.add_argument("--embedding-model", choices=["normal", "finlang", "financesmall"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     parser.add_argument("--no-copy", action="store_true", help="Do not copy source filings into data/uploads.")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be embedded without doing work.")
     parser.add_argument("--limit", type=int, default=0, help="Only process the first N selected filings.")

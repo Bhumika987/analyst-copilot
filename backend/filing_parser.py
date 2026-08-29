@@ -62,17 +62,33 @@ def _extract_sec_header_value(text: str, label: str) -> Optional[str]:
     return match.group(1).strip()
 
 
+F_PAGE_NUM_RE = re.compile(r"^\s*F-\s?(\d{1,3})\s*$", re.IGNORECASE)
+
+
 def _find_page_number(elements: List, hr_index: int) -> Optional[int]:
-    """Look backwards from the <hr/> for a standalone digit run = page number."""
+    """Look backwards from the <hr/> for a standalone digit run = page number.
+
+    Many 10-Ks restart pagination inside the financial statements section
+    with "F-1", "F-2", ... labels instead of plain digits. Those don't match
+    PAGE_NUM_RE and are deliberately NOT treated as a plain-digit page here
+    (returning a bare int for "F-3" would silently mean page 3, which is
+    wrong). Returning None for them is intentional: the caller advances the
+    running page count by one physical page instead, rather than freezing on
+    the last plain-digit page it saw -- which previously collapsed the
+    entire financial statements section (balance sheet, income statement,
+    cash flow statement, every footnote) onto a single wrong page number.
+    """
     start = max(0, hr_index - LOOKBACK_ELEMENTS)
     for el in reversed(elements[start:hr_index]):
         try:
             text = el.get_text() if hasattr(el, "get_text") else str(el)
         except Exception:
             continue
-        text = text.strip()
+        text = normalize_text(text).strip()
         if not text:
             continue
+        if F_PAGE_NUM_RE.match(text):
+            return None
         m = PAGE_NUM_RE.match(text)
         if m:
             num = int(m.group(1))
@@ -456,9 +472,32 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
 
         if el.name == "hr":
             pnum = page_after_hr.get(i)
-            if pnum is not None:
-                flush_text_buffer(current_page, current_section, current_subsection)
-                current_page = pnum + 1
+            flush_text_buffer(current_page, current_section, current_subsection)
+            # A real page-number label always advances forward and rarely by
+            # more than a page or two -- a match that jumps backwards or
+            # wildly forward (e.g. 20+ pages) is almost always a stray digit
+            # in nearby table/paragraph content, not an actual page label
+            # (this is how page_num previously jumped to nonsense values like
+            # 619/759 deep in a filing's notes). Reject those as if no label
+            # were found at all.
+            if pnum is not None and -1 <= (pnum - current_page) <= 20:
+                # The printed page-number label found just before this <hr/>
+                # belongs to the page that STARTS right after the break, not
+                # the one that just ended (SEC .htm filings render each
+                # page's number as a running head directly above the rule
+                # that opens it, followed by nav chrome like "Table of
+                # Contents" and then the page's real content). Verified by
+                # cross-referencing gold-labeled practice questions against
+                # the raw HTML: content immediately after the "59" label was
+                # gold-annotated as page 59, not 60. Do not add +1 here.
+                current_page = pnum
+            else:
+                # No plausible label for this break (e.g. an "F-N" financial
+                # statements label, or nothing at all) -- the <hr/> still
+                # marks one physical page turn, so advance by one instead of
+                # freezing and silently collapsing every subsequent page onto
+                # the last successfully-read page number.
+                current_page = current_page + 1
             processed_ids.add(id(el))
             continue
 

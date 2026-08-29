@@ -15,7 +15,11 @@ ACCOUNTING_CONCEPTS: Dict[str, Dict] = {
         "keywords": [
             "net ppne", "net pp&e", "property, plant and equipment, net",
             "property, plant and equipment — net", "property plant and equipment net",
-            "ppne", "pp&e", "property, plant and equipment", "property plant and equipment"
+            "ppne", "pp&e", "property, plant and equipment", "property plant and equipment",
+            # Not every filer says "plant" -- e.g. Activision Blizzard's balance
+            # sheet line item is just "Property and equipment, net".
+            "property and equipment, net", "property and equipment — net",
+            "property and equipment net", "property and equipment"
         ]
     },
     "CAPEX": {
@@ -97,6 +101,18 @@ ACCOUNTING_CONCEPTS: Dict[str, Dict] = {
         "statement": "BALANCE_SHEET",
         "keywords": [
             "total assets"
+        ]
+    },
+    "CURRENT_ASSETS": {
+        "statement": "BALANCE_SHEET",
+        "keywords": [
+            "total current assets", "current assets"
+        ]
+    },
+    "CURRENT_LIABILITIES": {
+        "statement": "BALANCE_SHEET",
+        "keywords": [
+            "total current liabilities", "current liabilities"
         ]
     },
     "TOTAL_LIABILITIES": {
@@ -233,6 +249,44 @@ UNRELATED_TOPIC_KEYWORDS = [
     "pension", "postretirement", "stock-based compensation", "operating lease", "commitments and contingencies"
 ]
 
+# Named ratios / verdict frameworks a question can ask about without ever
+# spelling out the formula (unlike e.g. the fixed-asset-turnover practice
+# question, which defines its own formula inline). Without this table the
+# system has no way to know that "quick ratio" requires current assets,
+# inventory, and current liabilities, or that a "capital-intensive?"
+# verdict should be grounded in CAPEX/revenue, fixed-assets/total-assets,
+# and ROA rather than a gut read of raw dollar figures -- so retrieval
+# never boosts the right line items and the LLM either declares the
+# question unanswerable or eyeballs a wrong verdict. Matching one of these
+# expands normalized_concepts/accounting_terms to the ratio's required
+# inputs and attaches the formula to the prompt as a deterministic note.
+DERIVED_RATIOS: Dict[str, Dict] = {
+    "QUICK_RATIO": {
+        "aliases": ["quick ratio", "acid test ratio", "acid-test ratio"],
+        "requires": ["CURRENT_ASSETS", "INVENTORY", "CURRENT_LIABILITIES"],
+        "formula": "Quick Ratio = (Current Assets - Inventory) / Current Liabilities",
+    },
+    "CURRENT_RATIO": {
+        "aliases": ["current ratio"],
+        "requires": ["CURRENT_ASSETS", "CURRENT_LIABILITIES"],
+        "formula": "Current Ratio = Current Assets / Current Liabilities",
+    },
+    "CAPITAL_INTENSITY": {
+        "aliases": ["capital-intensive", "capital intensive", "capital intensity"],
+        "requires": ["CAPEX", "NET_SALES_REVENUE", "PROPERTY_PLANT_EQUIPMENT_NET", "TOTAL_ASSETS", "NET_INCOME"],
+        "formula": (
+            "Judge capital intensity from ratios, not raw dollar magnitudes: "
+            "CAPEX / Revenue; Property Plant & Equipment (net) / Total Assets; "
+            "Return on Assets = Net Income / Total Assets."
+        ),
+    },
+    "DEBT_TO_EQUITY": {
+        "aliases": ["debt to equity", "debt-to-equity"],
+        "requires": ["DEBT", "TOTAL_EQUITY"],
+        "formula": "Debt-to-Equity = Total Debt / Total Equity",
+    },
+}
+
 
 @dataclass
 class QueryAnalysis:
@@ -254,6 +308,7 @@ class QueryAnalysis:
     requires_calculation: bool = False
     requires_multiple_evidence_chunks: bool = False
     target_statement_types: List[str] = field(default_factory=list)
+    derived_ratio_formula: str = ""
 
     @property
     def requested_statement(self) -> str:
@@ -327,6 +382,35 @@ def analyze_query(query: str) -> QueryAnalysis:
                 break
 
     metric = normalized_concepts[0] if normalized_concepts else ""
+
+    # 2b. Named Ratio / Verdict Framework Detection (see DERIVED_RATIOS).
+    # These questions never say "current assets" or "return on assets" --
+    # they name the ratio/verdict and expect the underlying line items to
+    # be found and combined, so the concept/accounting-term lists have to
+    # be expanded here or retrieval never boosts the right evidence.
+    derived_ratio_formula = ""
+    derived_ratio_statement_types = []
+    for ratio_info in DERIVED_RATIOS.values():
+        if not any(alias in q_lower for alias in ratio_info["aliases"]):
+            continue
+        derived_ratio_formula = ratio_info["formula"]
+        requires_calculation = True
+        if query_type not in ("CALCULATION", "COMPARISON", "TREND"):
+            query_type = "CALCULATION"
+        for concept_id in ratio_info["requires"]:
+            concept_info = ACCOUNTING_CONCEPTS.get(concept_id)
+            if not concept_info:
+                continue
+            if concept_id not in normalized_concepts:
+                normalized_concepts.append(concept_id)
+            for kw in concept_info["keywords"]:
+                if kw not in accounting_terms:
+                    accounting_terms.append(kw)
+            if inferred_statement == "ANY":
+                inferred_statement = concept_info["statement"]
+            if concept_info["statement"] not in derived_ratio_statement_types:
+                derived_ratio_statement_types.append(concept_info["statement"])
+        break
 
     # 3. Detect EXPLICITLY Requested Statement Type vs INFERRED Statement Type
     explicitly_requested = "ANY"
@@ -421,6 +505,9 @@ def analyze_query(query: str) -> QueryAnalysis:
         target_statement_types.append("BALANCE_SHEET")
     if any(k in q_lower for k in ("p&l", "profit and loss", "income statement", "statement of income", "statement of operations")) and "INCOME_STATEMENT" not in target_statement_types:
         target_statement_types.append("INCOME_STATEMENT")
+    for stmt in derived_ratio_statement_types:
+        if stmt not in target_statement_types:
+            target_statement_types.append(stmt)
 
     requires_multiple_evidence_chunks = (
         is_comparison
@@ -448,6 +535,7 @@ def analyze_query(query: str) -> QueryAnalysis:
         requires_calculation=requires_calculation,
         requires_multiple_evidence_chunks=requires_multiple_evidence_chunks,
         target_statement_types=list(dict.fromkeys(target_statement_types)),
+        derived_ratio_formula=derived_ratio_formula,
     )
 
 

@@ -12,6 +12,7 @@ needing to calibrate two incompatible score scales against each other.
 from __future__ import annotations
 
 import json
+import math
 import os
 import pickle
 import re
@@ -327,13 +328,13 @@ from config import (
     CONCEPT_MATCH_BOOST,
     YEAR_MATCH_BOOST,
     DUAL_AGREEMENT_BOOST,
-    MIN_CONTENT_EVIDENCE_SCORE,
     NEIGHBOR_EXPANSION_ENABLED,
     NEIGHBOR_WINDOW_SIZE,
     ENABLE_CROSS_ENCODER_RERANKER,
     CROSS_ENCODER_MODEL_NAME,
     CROSS_ENCODER_CANDIDATE_K,
     CROSS_ENCODER_LOCAL_ONLY,
+    CROSS_ENCODER_BLEND_WEIGHT,
     get_embedding_model_name,
 )
 from embedding_service import get_embedding_service
@@ -384,8 +385,18 @@ def _cross_encoder_text(c: Dict) -> str:
 
 def cross_encoder_rerank(query: str, candidates: List[Dict]) -> List[Dict]:
     """
-    Optional semantic relevance reranker over the candidate evidence set.
+    Optional semantic relevance refinement over the candidate evidence set.
     Falls back gracefully when the model is unavailable.
+
+    The cross-encoder is a generic passage-relevance model with no notion of
+    "this is the actual audited financial statement" vs. "this is a
+    narrative table that happens to share vocabulary with the query" -- that
+    distinction is exactly what deterministic_rerank's concept/statement-type
+    scoring exists to make. So the cross-encoder's score REFINES the
+    deterministic ranking (added on top, after squashing its unbounded logit
+    into a bounded contribution via sigmoid) rather than replacing it as the
+    sole sort key -- otherwise a lay-phrased MD&A mention can outrank the
+    correct financial-statement table purely on generic semantic similarity.
     """
     if not candidates:
         return []
@@ -409,13 +420,13 @@ def cross_encoder_rerank(query: str, candidates: List[Dict]) -> List[Dict]:
     scored = []
     for c, score in zip(rerank_pool, scores):
         c_copy = dict(c)
-        c_copy["cross_encoder_score"] = float(score)
-        # Cross-encoder scores are model logits, so keep the original
-        # structural score for observability and expose a separate final rank.
-        c_copy["final_rerank_score"] = float(score)
+        ce_score = float(score)
+        ce_sigmoid = 1.0 / (1.0 + math.exp(-ce_score))
+        c_copy["cross_encoder_score"] = ce_score
+        c_copy["final_rerank_score"] = c_copy.get("rerank_score", 0.0) + ce_sigmoid * CROSS_ENCODER_BLEND_WEIGHT
         scored.append(c_copy)
 
-    scored.sort(key=lambda c: c.get("final_rerank_score", c.get("rerank_score", 0.0)), reverse=True)
+    scored.sort(key=lambda c: c["final_rerank_score"], reverse=True)
     return scored + tail
 
 
@@ -560,6 +571,53 @@ def deterministic_rerank(query: str, candidates: List[Dict], query_info: Optiona
 
     reranked.sort(key=lambda x: x["rerank_score"], reverse=True)
     return reranked
+
+
+def _ensure_statement_coverage(
+    top_chunks: List[Dict],
+    ranked_pool: List[Dict],
+    query_info: Optional[QueryAnalysis],
+    top_k: int,
+) -> List[Dict]:
+    """
+    Guarantee every statement type a calculation question needs is present in
+    the final slice, not just the single best-matching one.
+
+    A ratio question spanning two statements (e.g. fixed-asset-turnover =
+    revenue / average PP&E, needing both the income statement and the
+    balance sheet) tends to have one side dominate BM25/rerank scoring --
+    "revenue" terms are common and match many chunks, so every slot in a
+    small top-k can fill with income-statement chunks while the balance-sheet
+    PP&E evidence ranks just outside the window. evaluate_retrieval_status()
+    then reports that evidence as "missing" even though it exists lower in
+    ranked_pool, and the system abstains on a question it could answer.
+    Backfill the highest-ranked candidate of each still-missing required
+    statement type from the full reranked pool (not just the top_k slice)
+    rather than expanding raw retrieval depth, which doesn't help when
+    ranking itself is what's burying the evidence.
+    """
+    if not query_info or not getattr(query_info, "requires_calculation", False):
+        return top_chunks
+
+    required = list(dict.fromkeys(getattr(query_info, "target_statement_types", []) or []))
+    if len(required) < 2:
+        return top_chunks
+
+    covered = {c.get("statement_type") for c in top_chunks}
+    missing = [st for st in required if st not in covered]
+    if not missing:
+        return top_chunks
+
+    result = list(top_chunks)
+    for st in missing:
+        candidate = next((c for c in ranked_pool if c.get("statement_type") == st), None)
+        if candidate is None or any(c.get("chunk_idx") == candidate.get("chunk_idx") for c in result):
+            continue
+        if len(result) >= top_k:
+            result[-1] = candidate
+        else:
+            result.append(candidate)
+    return result
 
 
 def expand_chunk_context(chunks: List[Dict], index: "FilingIndex", window: int = NEIGHBOR_WINDOW_SIZE) -> List[Dict]:
@@ -836,6 +894,7 @@ class FilingIndex:
 
         deterministic_ranked = deterministic_rerank(query, candidates, query_info=query_info)
         reranked_top = cross_encoder_rerank(query, deterministic_ranked)[:top_k]
+        reranked_top = _ensure_statement_coverage(reranked_top, deterministic_ranked, query_info, top_k)
         results = expand_chunk_context(reranked_top, self)
 
         if debug:
