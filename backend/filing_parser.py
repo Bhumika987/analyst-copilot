@@ -24,8 +24,19 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
-WINDOW_WORDS = 350
-OVERLAP_WORDS = 80
+# Page-level chunking: a flushed text block (bounded by page/section/
+# subsection/table boundaries -- see parse_filing_to_window_chunks) becomes
+# ONE chunk instead of being sliced into small overlapping windows. This
+# mirrors the FinanceBench_RAG approach of indexing at page granularity
+# rather than fragmenting a single page's prose across multiple retrieval
+# units, which risks splitting one answer's evidence across chunk
+# boundaries. PAGE_CHUNK_WORD_CAP is only a safety ceiling for the rare
+# unusually long unbroken run (e.g. a multi-page Risk Factors section with
+# no subsection headings); real single-page/subsection segments are almost
+# always well under it. OVERLAP_WORDS only matters for that rare over-cap
+# split fallback.
+PAGE_CHUNK_WORD_CAP = 1200
+OVERLAP_WORDS = 100
 LOOKBACK_ELEMENTS = 20
 PAGE_NUM_RE = re.compile(r"^\s*(\d{1,3})\s*$")
 
@@ -378,14 +389,14 @@ def _metadata_diagnostic(statement_type: str, structural_scores: Dict[str, int])
 
 
 def _windowize(text: str, page_num: Optional[int], section: str = "General", subsection: str = "", chunk_index_counter: Optional[List[int]] = None) -> List[Dict]:
-    """Split long text into overlapping word-count windows while preserving section metadata."""
+    """Emit a flushed text block as a single page-scoped chunk (see module-level note on PAGE_CHUNK_WORD_CAP)."""
     if chunk_index_counter is None:
         chunk_index_counter = [0]
 
     st_type = _detect_statement_type(section=section, subsection=subsection, text=text)
 
     words = text.split()
-    if len(words) <= WINDOW_WORDS:
+    if len(words) <= PAGE_CHUNK_WORD_CAP:
         idx = chunk_index_counter[0]
         chunk_index_counter[0] += 1
         return [{
@@ -401,9 +412,9 @@ def _windowize(text: str, page_num: Optional[int], section: str = "General", sub
         }]
 
     chunks = []
-    step = WINDOW_WORDS - OVERLAP_WORDS
+    step = PAGE_CHUNK_WORD_CAP - OVERLAP_WORDS
     for start in range(0, len(words), step):
-        window_words = words[start:start + WINDOW_WORDS]
+        window_words = words[start:start + PAGE_CHUNK_WORD_CAP]
         if not window_words:
             continue
         idx = chunk_index_counter[0]
@@ -419,7 +430,7 @@ def _windowize(text: str, page_num: Optional[int], section: str = "General", sub
             "chunk_index": idx,
             "text": " ".join(window_words),
         })
-        if start + WINDOW_WORDS >= len(words):
+        if start + PAGE_CHUNK_WORD_CAP >= len(words):
             break
     return chunks
 

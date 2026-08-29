@@ -52,8 +52,11 @@ filing_parser.py    — splits the filing into page-aware chunks. SEC EDGAR
                        printed page number in a small tag right before each
                        break — that number labels the page that STARTS after
                        the break, not the one before it. Tables are kept
-                       atomic (never split mid-table); long text sections
-                       become 350-word overlapping windows.
+                       atomic (never split mid-table); each page/section-
+                       scoped block of prose becomes one chunk rather than
+                       being sliced into small overlapping windows, so a
+                       single page's evidence doesn't get fragmented across
+                       multiple retrieval units.
     │
     ▼
 retrieval.py         — builds a per-filing hybrid index: BM25 (primary
