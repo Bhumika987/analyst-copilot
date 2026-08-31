@@ -13,3 +13,6 @@ logs/*.jsonl
 env/
 data/huggingface_cache
 *.py[cod]
+
+# Claude Code runtime files
+.claude/
