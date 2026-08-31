@@ -8,12 +8,17 @@ Generic instructions for running this on any Docker-friendly host. A
 **Environment variables** (set as secrets/env vars in your host's
 dashboard -- never commit them):
 
-- `GROQ_API_KEY` -- required unless you're using a different `LLM_PROVIDER`.
-- `LLM_PROVIDER` -- optional, defaults to `groq`. Set to `claude` (needs
-  `ANTHROPIC_API_KEY`, defaults to `claude-haiku-4-5`) or one of the other
-  providers wired into `backend/llm.py` if you're using those instead.
+- `LLM_PROVIDER` -- optional, defaults to `fireworks`. One of `fireworks`,
+  `bedrock`, `bedrock_openai`, `azure` -- see `backend/llm.py`'s top-of-file
+  provider config for exactly which env vars each one needs
+  (`FIREWORKS_API_KEY`; `AWS_REGION` + `AWS_BEARER_TOKEN_BEDROCK` for either
+  Bedrock variant; `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` +
+  `AZURE_OPENAI_DEPLOYMENT` for Azure).
 - `EMBEDDING_MODEL` -- optional, defaults to `normal` (BGE-small, baked
   into the image at build time -- see the Dockerfile).
+- `DATABASE_URL` -- optional, a Postgres connection string. See
+  "Persistent storage" below -- lets the app survive without a mounted
+  volume.
 
 **Persistent storage.** `data/uploads/` (raw uploaded filings) and
 `data/indexes/` (their BM25/FAISS indexes) are created at runtime and are
@@ -21,6 +26,45 @@ NOT baked into the image -- without a persistent volume mounted at
 `/app/data`, every filing you index disappears on the next deploy or
 container restart and has to be re-uploaded. Mount a volume there on
 whichever host you use.
+
+**Or skip the volume and use Postgres instead.** Set `DATABASE_URL` (a
+normal Postgres connection string, `postgresql://user:pass@host:5432/db`)
+and the app additively syncs every indexed filing there too (see
+`backend/postgres_store.py`); on startup, any filing Postgres knows about
+that isn't on local disk gets pulled back down automatically (see
+`hydrate_from_postgres` in `backend/main.py`'s startup handler). This is
+what makes a host WITHOUT persistent volumes (or a fresh container after
+every deploy) still come up with all your indexed filings. A volume and
+Postgres both being set is fine too -- local disk stays a warm cache
+either way, Postgres is the durable copy. Postgres support requires the
+`vector` extension (pgvector) and only stores 384-dim embeddings, i.e.
+filings indexed with `EMBEDDING_MODEL=normal` (the default) -- see the
+docstring at the top of `backend/postgres_store.py` for why.
+
+To backfill filings you already indexed locally into a freshly provisioned
+Postgres database:
+```bash
+DATABASE_URL=postgresql://... python scripts/backfill_postgres.py
+```
+Safe to re-run; it upserts, it doesn't duplicate.
+
+### Azure specifically
+
+The $200 free-tier credit covers this comfortably for a hackathon-length
+deployment:
+1. **Azure Database for PostgreSQL - Flexible Server** (Burstable B1ms
+   tier is enough here) -- create it, then connect and run
+   `CREATE EXTENSION vector;` once (or let `postgres_store.ensure_schema()`
+   do it automatically on first app startup -- it runs
+   `CREATE EXTENSION IF NOT EXISTS vector;` itself). Copy the connection
+   string into `DATABASE_URL`.
+2. **Azure Container Apps** (or Web App for Containers) -- point it at
+   this repo's `Dockerfile`, either via a container registry push or
+   Azure's "build from GitHub repo" flow. Set `DATABASE_URL` and your LLM
+   provider's env vars as secrets in the Container App's configuration.
+3. Run the backfill script once (from your own machine, pointed at the
+   Azure Postgres connection string, or as a one-off Container Apps job)
+   to push your locally-indexed filings up before the first deploy.
 
 **Port.** The container reads `$PORT` and binds to it (falls back to
 `8000` if unset). Most PaaS hosts inject `PORT` automatically; for a bare
@@ -34,7 +78,7 @@ point your host's health check at this path.
 ```bash
 docker build -t analyst-copilot .
 docker run -p 8000:8000 \
-  -e GROQ_API_KEY=your-key-here \
+  -e FIREWORKS_API_KEY=your-key-here \
   -v analyst-copilot-data:/app/data \
   analyst-copilot
 ```
@@ -85,7 +129,7 @@ steps above apply to any of them:
 - **Fly.io**: `fly launch` in the repo root detects the Dockerfile and
   scaffolds a `fly.toml`. Add a volume with
   `fly volumes create data --size 1` and mount it at `/app/data` in
-  `fly.toml`. Set secrets with `fly secrets set GROQ_API_KEY=...`.
+  `fly.toml`. Set secrets with `fly secrets set FIREWORKS_API_KEY=...`.
 - **Railway**: New Project -> Deploy from GitHub repo -> it detects the
   Dockerfile automatically. Add a Volume from the service's Settings,
   mount path `/app/data`. Set env vars under Variables.

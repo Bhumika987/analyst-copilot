@@ -1,25 +1,31 @@
-.git
+.git/
 .gitignore
-.claude
-.pytest_cache
+.claude/
+.pytest_cache/
+**/.pytest_cache/
+
 env/
-__pycache__/
+venv/
+.venv/
+
+**/__pycache__/
 *.pyc
 *.pyo
 
-# User data -- created at runtime on a persistent volume, not shipped in
-# the image (also keeps the build context small and the image reproducible
-# regardless of what's been indexed locally).
+# Runtime data already migrated to PostgreSQL
 data/uploads/
 data/indexes/
 
-# Secrets -- never bake API keys into the image. Set these as env vars /
-# secrets in the host's dashboard instead (see DEPLOYMENT.md).
+# Secrets
 .env
 .env.*
 
-# Local-only artifacts
+# Local artifacts
 logs/
 eval_results*.json
 *.log
 tests/
+
+# Frontend dependencies, if present
+node_modules/
+**/node_modules/

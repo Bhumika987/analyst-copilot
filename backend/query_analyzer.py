@@ -666,6 +666,26 @@ def expand_query(query: str) -> str:
     if any(k in q_lower for k in ("which segment", "which category", "which region", "which product", "which business", "which division")):
         extra_terms.extend(["organic sales change", "by segment", "each segment"])
 
+    # Open-ended qualitative verdict questions ("is the business cyclical",
+    # "is this a high-growth company", "are margins historically
+    # consistent") carry no accounting concept at all -- analyze_query
+    # correctly leaves normalized_concepts/accounting_terms empty for them,
+    # since there's no single line item to look up. But that also means
+    # nothing routes retrieval toward the specific narrative sections that
+    # actually carry this kind of judgment (Item 1A Risk Factors for
+    # cyclicality/seasonality disclosures; MD&A trend commentary for
+    # growth/consistency framing) -- retrieval falls back to whatever's
+    # lexically closest to the bare question, which confirmed misses
+    # (Boeing cyclicality, JnJ "high growth company") show is often nothing
+    # useful, producing a NOT_FOUND that's a retrieval-recall gap, not a
+    # genuine absence of evidence.
+    if any(k in q_lower for k in ("cyclical", "cyclicality", "seasonality", "seasonal")):
+        extra_terms.extend(["our business is subject to", "cyclical", "seasonal fluctuations", "risk factors"])
+    if any(k in q_lower for k in ("high growth", "high-growth", "growth company", "growth profile")):
+        extra_terms.extend(["revenue growth", "growth strategy", "results of operations", "year over year"])
+    if "consistent" in q_lower and any(k in q_lower for k in ("margin", "margins")):
+        extra_terms.extend(["gross margin", "gross profit", "results of operations", "cost of"])
+
     if analysis.accounting_terms:
         extra_terms.extend(analysis.accounting_terms)
 

@@ -497,6 +497,10 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
     current_subsection = ""
     text_buffer: List[str] = []
     chunk_index_counter = [0]
+    # Last plain-digit label _find_page_number actually found near an
+    # <hr/>, tracked independently of whether the sanity check below
+    # accepted it -- see the resync logic in the loop for why.
+    last_raw_label: Optional[int] = None
 
     def flush_text_buffer(page_num, sec, sub):
         if not text_buffer:
@@ -520,7 +524,31 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
             # (this is how page_num previously jumped to nonsense values like
             # 619/759 deep in a filing's notes). Reject those as if no label
             # were found at all.
-            if pnum is not None and -1 <= (pnum - current_page) <= 20:
+            #
+            # Comparing only against current_page has a confirmed, serious
+            # failure mode: current_page only advances when a label is
+            # ACCEPTED, so one early false-positive match (or an unlabeled
+            # break) permanently drifts it away from the filing's true page
+            # count -- and once that happens, every subsequent label is
+            # REAL and perfectly sequential but keeps failing the check
+            # anyway, because it's being compared to an already-wrong
+            # counter. Traced against a real filing: a single stray "190"
+            # match on page 2 pushed current_page one page ahead, after
+            # which every following correct label (3, 4, 5, ... 73) was
+            # rejected in turn for the rest of the document -- a permanent,
+            # one-way drift with no recovery, not an isolated miss.
+            #
+            # The fix: also compare against the last RAW label actually
+            # found (regardless of whether it was accepted last time). Two
+            # consecutive raw labels one page apart are strong, mutually-
+            # confirming evidence that both are real -- enough to resync
+            # current_page to them even when the (possibly already-drifted)
+            # counter itself disagrees.
+            resync = (
+                pnum is not None and last_raw_label is not None
+                and pnum - last_raw_label == 1
+            )
+            if pnum is not None and (resync or -1 <= (pnum - current_page) <= 20):
                 # The printed page-number label found just before this <hr/>
                 # belongs to the page that STARTS right after the break, not
                 # the one that just ended (SEC .htm filings render each
@@ -538,6 +566,8 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
                 # freezing and silently collapsing every subsequent page onto
                 # the last successfully-read page number.
                 current_page = current_page + 1
+            if pnum is not None:
+                last_raw_label = pnum
             processed_ids.add(id(el))
             continue
 

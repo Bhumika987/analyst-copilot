@@ -5,9 +5,36 @@ A chatbot that answers analyst-style questions over SEC annual/quarterly filings
 an exact page citation — or an honest "not found in this filing."
 
 Built for a scoring rubric where a confidently wrong answer is worse than no
-answer at all: `+1` correct answer + correct page, `0` abstain, `0` correct
-answer but wrong page, `-1` wrong answer. Every design decision here optimizes
-for that asymmetry — the system is built to abstain rather than guess.
+answer at all:
+
+| System output | Score |
+|---|---|
+| Correct answer, correct page | **+1** |
+| "Not found in this filing" | **0** |
+| Correct answer, wrong page | **0** |
+| Confidently wrong answer | **−1** |
+
+A system that always abstains finishes at exactly zero; a system that
+guesses finishes below zero. Every design decision here optimizes for that
+asymmetry — the system is built to abstain rather than guess. Full
+architecture, formulas, and measured results are in
+**[DOCUMENTATION.md](DOCUMENTATION.md)** — this README is the quick-start
+and submission checklist; that file is the one-page-and-beyond approach
+note and technical writeup.
+
+## What's in this submission
+
+| Required | Status |
+|---|---|
+| Question-answering chatbot over filings, precise answer + exact page or honest "not found" | ✅ [`backend/llm.py`](backend/llm.py) — see [DOCUMENTATION.md §1–2](DOCUMENTATION.md#1-architecture) |
+| "Add filing" control, visible progress, completes under 10 min | ✅ SSE progress events, `POST /api/filings/upload` |
+| Chat box, plain English questions | ✅ [`frontend/index.html`](frontend/index.html) |
+| Evidence (document + page) shown on every reply | ✅ clickable page citations, opens the full source page in-app |
+| Ability to decline when evidence is weak/absent | ✅ rule-based gate runs before any LLM call — see [DOCUMENTATION.md §2.4](DOCUMENTATION.md#24-evidence-sufficiency-gate) |
+| Git repo + README that runs it from scratch | ✅ this file |
+| Running system, live for the session | see [DEPLOYMENT.md](DEPLOYMENT.md) |
+| One-page approach note (tried / measured / kept / threw away) | ✅ [Approach note](#approach-note) below, full detail in [DOCUMENTATION.md](DOCUMENTATION.md) |
+| Practice set (136 Qs) as self-eval | ✅ [`scripts/evaluate.py`](scripts/evaluate.py), rubric implemented exactly — see [Running the evaluator](#running-the-evaluator) |
 
 ## Quick start
 
@@ -19,30 +46,47 @@ pip install -r requirements.txt
 
 **2. Set your LLM provider credentials**
 
-Defaults to Groq (free tier, no cost, but a shared per-minute rate limit).
+`backend/llm.py` dispatches to one of four providers behind a single
+`LLM_PROVIDER` env var: `fireworks` (default), `bedrock`, `bedrock_openai`,
+`azure`. This list was deliberately narrowed from a wider set this project
+carried at points during development — Groq, a direct Anthropic API
+integration, and Cerebras were all tried and dropped: Groq started hitting
+`413 Payload Too Large` once this codebase moved to page-level chunking
+(request bodies grew past the free tier's size limit), Cerebras hit rate
+limits/disconnects on roughly 10% of calls in a real eval run, and the
+direct-Anthropic integration was subsumed by `bedrock`, which serves the
+same Claude models billed through AWS instead of a separate Anthropic key.
+Kept:
 
-PowerShell:
+- **`fireworks`** (default) — OpenAI's open-weight gpt-oss-120b via
+  Fireworks AI. Ran cleanly through a full 86-question batch with zero
+  transport errors. Needs `FIREWORKS_API_KEY` (optionally `FIREWORKS_MODEL`,
+  defaults to `accounts/fireworks/models/gpt-oss-120b`).
+- **`bedrock`** — Claude models via Amazon Bedrock's native Messages route,
+  authenticated with a Bedrock API key (no boto3/AWS SigV4 needed). Needs
+  `AWS_REGION` and `AWS_BEARER_TOKEN_BEDROCK` (optionally `BEDROCK_MODEL`).
+- **`bedrock_openai`** — the same gpt-oss-120b model as Fireworks, routed
+  through Bedrock's OpenAI-compatible endpoint instead, billed through AWS.
+  Same env vars as `bedrock` (optionally `BEDROCK_OPENAI_MODEL`).
+- **`azure`** — an OpenAI-compatible model deployed on Azure OpenAI
+  Service. Needs `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` (e.g.
+  `https://your-resource.openai.azure.com`), and `AZURE_OPENAI_DEPLOYMENT`
+  (the deployment name you gave the model in Azure AI Foundry — Azure
+  selects the model that way, not by a bare model id; optionally
+  `AZURE_OPENAI_API_VERSION`, defaults to `2024-10-21`).
+
+PowerShell, sticking with the default:
 ```powershell
-$env:GROQ_API_KEY = "your-groq-api-key-here"
+$env:FIREWORKS_API_KEY = "your-fireworks-api-key-here"
 ```
 
-Get a free key at [console.groq.com](https://console.groq.com).
-
-To use Claude instead (paid, metered, no free tier -- but no shared rate-limit
-ceiling and generally stronger reasoning on the calculation/judgment
-questions), set `LLM_PROVIDER=claude` plus an Anthropic API key, either as
-env vars or in `.env`:
-
+Or Azure OpenAI:
 ```powershell
-$env:LLM_PROVIDER = "claude"
-$env:ANTHROPIC_API_KEY = "your-anthropic-api-key-here"
+$env:LLM_PROVIDER = "azure"
+$env:AZURE_OPENAI_API_KEY = "your-azure-openai-key-here"
+$env:AZURE_OPENAI_ENDPOINT = "https://your-resource.openai.azure.com"
+$env:AZURE_OPENAI_DEPLOYMENT = "your-deployment-name"
 ```
-
-Get a key at [console.anthropic.com](https://console.anthropic.com). Defaults
-to `claude-haiku-4-5` (cheapest/fastest tier, no shared rate limit like
-Groq's free tier); override with `CLAUDE_MODEL` (e.g. `claude-sonnet-5` or
-`claude-opus-5`) if answer quality on harder calculation/judgment questions
-matters more than cost per question.
 
 **3. Run the server**
 
@@ -58,57 +102,23 @@ Go to [http://localhost:8000](http://localhost:8000) in your browser.
 - Click **Add Filing** to upload a `.htm` SEC filing (indexing completes in
   under 10 minutes; most filings take under a minute).
 - Select a filing from the sidebar, then ask a question in the chat box.
+- Every evidence citation is clickable — opens the full source page so you
+  can verify the answer in context, not just take a quoted sentence on faith.
 
-## Architecture
+## Architecture (short version)
 
 ```
-.htm filing
-    │
-    ▼
-filing_parser.py    — splits the filing into page-aware chunks. SEC EDGAR
-                       .htm files use <hr/> tags as page breaks, with the
-                       printed page number in a small tag right before each
-                       break — that number labels the page that STARTS after
-                       the break, not the one before it. Tables are kept
-                       atomic (never split mid-table); each page/section-
-                       scoped block of prose becomes one chunk rather than
-                       being sliced into small overlapping windows, so a
-                       single page's evidence doesn't get fragmented across
-                       multiple retrieval units.
-    │
-    ▼
-retrieval.py         — builds a per-filing hybrid index: BM25 (primary
-                       signal, exact financial vocabulary/numbers) + FAISS
-                       dense search (secondary, BAAI/bge-small-en-v1.5
-                       sentence embeddings for paraphrase recall), fused
-                       with Reciprocal Rank Fusion, then reranked (a local
-                       cross-encoder when available, else deterministic
-                       structural/boost scoring using query_analyzer.py's
-                       concept/statement/year extraction).
-    │
-    ▼
-llm.py               — evaluate_retrieval_status() is a rule-based gate
-                       (concept, statement/section, period, and numeric-
-                       value checks against the top chunks, via
-                       query_analyzer.py) that runs before any LLM call. If
-                       evidence fails those rules, we return NOT_FOUND
-                       immediately and the LLM is never invoked. When it is
-                       called, a strict system prompt forbids using outside
-                       knowledge and requires NOT_FOUND when the passages
-                       don't contain the answer. Provider is configurable
-                       via LLM_PROVIDER: Groq (openai/gpt-oss-120b, free
-                       tier, default) or Claude (claude-haiku-4-5 by
-                       default).
-                       Retries with exponential backoff on rate limits.
-    │
-    ▼
-main.py              — FastAPI app: upload/index endpoint (SSE progress),
-                       chat endpoint (SSE streaming answer + evidence).
+.htm filing → filing_parser.py (page-aware chunks)
+            → retrieval.py (BM25 + FAISS, RRF fusion, deterministic +
+              cross-encoder rerank)
+            → llm.py (rule-based evidence gate → NOT_FOUND, or → LLM call
+              → parsed answer + page citation)
+            → main.py (FastAPI: upload/chat endpoints)
 ```
 
-`ingest.py` orchestrates parse → BM25 → embed → save, with progress events
-for the UI. `scripts/evaluate.py` replays `practice-questions.jsonl` against
-the running pipeline and scores it against the exact competition rubric.
+Full diagram (with the fusion/rerank math, notation, and code snippets for
+every stage), the named-ratio formula table, and the scoring-criteria
+detail: **[DOCUMENTATION.md §1–2](DOCUMENTATION.md#1-architecture)**.
 
 ### Why abstain-first?
 
@@ -118,8 +128,18 @@ material is thin. `evaluate_retrieval_status()` checks the top chunks
 against rule-based requirements (does the requested concept, statement
 type, fiscal year, and numeric value actually show up in what was
 retrieved) and returns NOT_FOUND before the LLM is ever called if they
-don't. Gating on retrieval evidence this way is a cheaper and more reliable
-way to avoid a `-1` than trusting the model's self-reported confidence.
+don't.
+
+### What makes this different
+
+See **[DOCUMENTATION.md §4](DOCUMENTATION.md#4-what-makes-this-different-outstanding-features)**
+for the full case. In short: an abstain gate that's architectural, not
+prompt-based; retrieval that understands accounting concepts and statement
+types as first-class signals, not just semantic similarity; named-ratio
+expansion for questions that never spell out their own formula, calibrated
+against this dataset's actual gold answers; page citations verified
+byte-for-byte against raw filing HTML; and a deployment story that survives
+an ephemeral container disk via additive Postgres persistence.
 
 ## Project layout
 
@@ -136,16 +156,26 @@ way to avoid a `-1` than trusting the model's self-reported confidence.
 │   ├── vector_store.py     FAISS index wrapper
 │   ├── config.py           central tunables (boosts, top-k depths, RRF params)
 │   ├── ingest.py           parse -> index -> save pipeline (streaming)
-│   └── llm.py              Groq calls, rule-based evidence gate, answer parsing
+│   ├── postgres_store.py   optional networked persistence (Postgres + pgvector),
+│   │                       additive to the local file-based store
+│   └── llm.py              multi-provider LLM dispatch, rule-based evidence gate,
+│                           answer parsing
 ├── frontend/
 │   └── index.html       single-file dark-themed chat UI
 ├── scripts/
-│   └── evaluate.py       scoring harness against practice-questions.jsonl
+│   ├── evaluate.py            scoring harness against practice-questions.jsonl
+│   │                          (--from-postgres to source from the deployed
+│   │                          Postgres store instead of local files)
+│   └── backfill_postgres.py   one-time (re-runnable) local -> Postgres migration
 ├── data/
 │   ├── filings/           provided SEC filings (gitignored - not code)
 │   ├── practice-questions.jsonl   (gitignored - not code)
 │   ├── indexes/           saved per-filing BM25/FAISS indexes (gitignored)
 │   └── uploads/           uploaded filings (gitignored)
+├── Dockerfile / .dockerignore   generic container build, any Docker-friendly host
+├── DEPLOYMENT.md                deployment steps, incl. Postgres/Azure setup
+├── DOCUMENTATION.md             full technical writeup — architecture, formulas,
+│                                 notation, measured results, bug history
 ├── requirements.txt
 └── .gitignore
 ```
@@ -164,9 +194,15 @@ Useful flags:
 - `--limit N` — only run the first N questions
 - `--doc DOC_NAME` — only run questions for one filing
 - `--no-embed` — BM25-only, skip dense embeddings (faster)
+- `--from-postgres` — source every filing from Postgres (`DATABASE_URL`)
+  instead of local files, to verify the deployed data path end to end.
+  Requires `EMBEDDING_MODEL=normal`.
 
 Results print per-question and as a summary, and are saved to
-`eval_results.json`.
+`eval_results.json`. Scoring criteria implemented exactly as in the table
+at the top of this file — see [DOCUMENTATION.md §2.6](DOCUMENTATION.md#26-scoring-criteria-the-rubric-this-whole-system-is-optimized-for)
+for the full rubric and [§5](DOCUMENTATION.md#5-measurement--evaluation-methodology-and-example-output)
+for measured results and example output.
 
 ## Testing the API directly
 
@@ -193,7 +229,13 @@ with `evaluate_retrieval_status()`'s rule-based checks (concept, statement
 type, fiscal year, numeric value) in `llm.py`, so we abstain before ever
 calling the LLM when the top chunks don't actually satisfy the question.
 This is the single biggest lever on the score, since every wrong answer
-costs twice what a right answer earns.
+costs twice what a right answer earns. A diagnostic rerun of the 86
+hardest-known-failing practice questions, before and after this session's
+fixes, moved the aggregate score on that subset from −16 to −11 with 5
+questions flipping to fully correct — real, but measured on a deliberately
+hardest-case slice, not the full 136-question set (see
+[DOCUMENTATION.md §5](DOCUMENTATION.md#5-measurement--evaluation-methodology-and-example-output)
+for the honest caveats and full numbers).
 
 **What we kept:** Page-aware chunking with atomic tables (a split table row
 is a guaranteed wrong number), and a strict "quote the source or say
@@ -204,3 +246,12 @@ was overconfident even on thin evidence. We also removed a single numeric
 `CONFIDENCE_THRESHOLD` score-gate that had decayed to an inert 0.001 and was
 no longer doing anything; `evaluate_retrieval_status()`'s rule-based checks
 are the actual, live gate and a more honest one than either.
+
+**Bugs found and fixed, evidenced against real filings and gold answers —
+not guessed:** page-citation drift, a NOT_FOUND-parsing bug that was
+silently converting safe abstains into penalized wrong answers, a
+cross-encoder score override, a duplicate-disclosure retrieval trap,
+non-calendar fiscal-year column confusion, a gain/loss sign-convention
+miss, and a dead synonym-expansion code path. Each one is written up in
+full — the specific filing, the specific gold answer, the fix — in
+**[DOCUMENTATION.md §6](DOCUMENTATION.md#6-bugs-found-and-fixed-the-approach-notes-evidence-trail)**.
