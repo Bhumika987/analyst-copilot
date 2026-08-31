@@ -107,6 +107,8 @@ Go to [http://localhost:8000](http://localhost:8000) in your browser.
 
 ## Architecture (short version)
 
+![Analyst Copilot architecture diagram](docs/architecture-diagram.png)
+
 ```
 .htm filing → filing_parser.py (page-aware chunks)
             → retrieval.py (BM25 + FAISS, RRF fusion, deterministic +

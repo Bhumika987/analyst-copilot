@@ -11,6 +11,12 @@ for the "how" and "why," the README for "how to run it."
 
 ## 1. Architecture
 
+![Analyst Copilot architecture diagram](docs/architecture-diagram.png)
+
+The flowchart below is the same architecture in a portable, always-renders
+form (GitHub/most Markdown viewers render Mermaid natively); the image
+above is the same system laid out with more module-level detail.
+
 ```mermaid
 flowchart TD
     A["Raw .htm SEC filing<br/>(10-K / 10-Q / 8-K)"] --> B["filing_parser.py<br/>page-aware chunking"]
