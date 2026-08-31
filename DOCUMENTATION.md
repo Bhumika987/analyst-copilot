@@ -11,6 +11,12 @@ for the "how" and "why," the README for "how to run it."
 
 ## 1. Architecture
 
+![Analyst Copilot architecture diagram](docs/architecture-diagram.png)
+
+The flowchart below is the same architecture in a portable, always-renders
+form (GitHub/most Markdown viewers render Mermaid natively); the image
+above is the same system laid out with more module-level detail.
+
 ```mermaid
 flowchart TD
     A["Raw .htm SEC filing<br/>(10-K / 10-Q / 8-K)"] --> B["filing_parser.py<br/>page-aware chunking"]
@@ -321,54 +327,5 @@ Confidence: 0.0
 
 
 
----
-
-## 6. Bugs found and fixed (the approach note's evidence trail)
-
-See the README's Approach Note for the short version. In full, each entry
-below was confirmed against a real filing and a real gold answer before
-being treated as a bug:
-
-1. **Page-citation drift** (`filing_parser.py`) — an early cover/TOC page
-   with no digit label caused the running page counter to drift ahead by
-   one, after which every subsequent *correct* sequential label failed a
-   too-strict "labels only move forward" check and got rejected in turn —
-   a permanent, one-way drift for the rest of the document. Fixed with a
-   resync check: two consecutive raw labels exactly one page apart are
-   trusted even if they disagree with the (possibly already-drifted)
-   running counter. Verified against Nike 2018 10-K raw HTML: the balance
-   sheet table now lands on page 45 (gold), not the drifted 48.
-2. **NOT_FOUND parser safety bug** (`llm.py`) — the parser required an
-   exact string match against `"NOT_FOUND"`. A model that wrote
-   `ANSWER: NOT_FOUND` correctly, then added an analysis paragraph after
-   it (format drift, not a wrong guess), had the whole blob graded as a
-   real (wrong) answer — silently turning a safe `0` into a penalized
-   `-1`. This is the one failure mode the abstain-first design exists to
-   prevent, happening invisibly at the parsing layer.
-3. **Cross-encoder score override** (`retrieval.py`) — the reranker's raw
-   logit replaced, rather than blended with, the deterministic
-   concept/statement score, letting a lay-phrased mention outrank the
-   actual financial statement. Fixed with a sigmoid blend (§2.3).
-4. **Duplicate-disclosure retrieval trap** — segment revenue/income is
-   reported twice in a 10-Q (a concise MD&A summary table, and again,
-   more granularly, in a numbered financial-statement Note); nothing
-   distinguished them, so "which segment had the lowest X" questions kept
-   retrieving the Notes copy. Confirmed against two real misses on the
-   same filer (JPMorgan 2021Q1 and 2022Q2 10-Qs).
-5. **Non-calendar fiscal-year column confusion** — several filers (Best
-   Buy, Nike, Target) name a fiscal year for the calendar year most of it
-   falls in; a three-column 10-Q balance sheet's prior-year-same-quarter
-   column is easy to mistake for the fiscal-year-end column beside it.
-   Confirmed against a Best Buy cash-trend question that got the
-   direction backwards.
-6. **"(Gain)/(Loss) on X" sign convention** — in an "Other
-   (income)/deductions, net" rollup, the caption word sets the true sign,
-   not the parenthetical formatting of the adjacent number (these
-   sections total net *expense*, so a real gain is entered as a
-   subtraction). Confirmed against a Pfizer question where an $8.1B gain
-   was read as an $8.1B loss.
-7. **Dead synonym-expansion code path** (`retrieval.py`) — a local
-   `expand_query()` (financial-term synonym aliases) was silently
-   shadowed by an identically-named import a few lines later, meaning
-   the synonym expansion had never actually run. Found by introspecting
+by introspecting
    which function object the name was bound to at runtime.
