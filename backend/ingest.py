@@ -40,13 +40,13 @@ async def _sync_to_postgres_if_configured(index: FilingIndex):
         print(f"Warning: Postgres sync failed for '{index.doc_name}' (local index is unaffected): {exc}")
 
 
-async def hydrate_from_postgres(doc_name: str) -> FilingIndex:
+async def hydrate_from_postgres(doc_name: str, cache_locally: bool = True) -> FilingIndex:
     """
-    Rebuild one filing's index in memory from Postgres and cache it locally
-    -- this is what makes a freshly deployed container (empty local
-    data/indexes/, ephemeral disk, no seeded volume) actually see filings
-    that were indexed and backfilled before it started, without re-parsing
-    the original .htm (which isn't even present on this container).
+    Rebuild one filing's index in memory from Postgres -- this is what
+    makes a freshly deployed container (empty local data/indexes/,
+    ephemeral disk, no seeded volume) actually see filings that were
+    indexed and backfilled before it started, without re-parsing the
+    original .htm (which isn't even present on this container).
 
     BM25 is rebuilt locally from the fetched chunk text (cheap, in-memory,
     milliseconds even for a large filing) rather than also being stored in
@@ -54,8 +54,17 @@ async def hydrate_from_postgres(doc_name: str) -> FilingIndex:
     query-time (see postgres_store.hybrid_search), so this local rebuild is
     purely to keep FilingIndex's normal in-process hybrid_search path
     working unchanged for a hydrated filing, same as any locally-indexed
-    one. Saved to local disk after hydrating so a container restart within
-    the same session doesn't re-fetch from Postgres every time.
+    one.
+
+    `cache_locally=True` (the deployed-container default) saves to local
+    disk and registers in the shared in-memory cache, so a restart within
+    the same session doesn't re-fetch from Postgres every time. Pass
+    `cache_locally=False` to skip both -- used by scripts/evaluate.py's
+    --from-postgres mode, which exists specifically to verify Postgres has
+    correct, complete data end to end; writing the result back to local
+    disk (which, on a dev machine, likely already has this filing indexed
+    from before the migration) would defeat that check by making the next
+    lookup silently succeed from the local copy instead of Postgres again.
     """
     chunks, vectors, metadata = await pg.load_filing(doc_name)
     if chunks is None:
@@ -64,8 +73,9 @@ async def hydrate_from_postgres(doc_name: str) -> FilingIndex:
     await run_blocking(index.build_bm25)
     if vectors is not None:
         index.set_vectors(vectors)
-    await run_blocking(index.save)
-    register_index(doc_name, index)
+    if cache_locally:
+        await run_blocking(index.save)
+        register_index(doc_name, index)
     return index
 
 

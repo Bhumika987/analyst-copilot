@@ -26,10 +26,18 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = SCRIPT_DIR.parent / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
-from ingest import ingest_filing  # noqa: E402
+from ingest import ingest_filing, hydrate_from_postgres  # noqa: E402
 from llm import answer_question, get_embedding, call_llm_raw  # noqa: E402
 from retrieval import get_index, cross_filing_hybrid_search  # noqa: E402
 from config import get_embedding_model_name  # noqa: E402
+import postgres_store as pg  # noqa: E402
+
+# Populated only in --from-postgres mode -- deliberately separate from
+# retrieval.py's own _INDEX_CACHE/local-disk-backed get_index() so a
+# Postgres-sourced run can never silently fall back to (or get shadowed
+# by) whatever's already indexed locally on the machine running this
+# script. See hydrate_from_postgres(cache_locally=False) in ingest.py.
+_PG_INDEX_CACHE = {}
 
 # ---- path constants ----
 DATA_ALT = Path(r"c:\Users\Sakshi Sinha\Downloads\analyst-copilot-data 1\analyst-copilot-data")
@@ -422,7 +430,25 @@ def load_questions(limit=None, doc_filter=None, reverse=False):
     return questions
 
 
-async def ensure_indexed(doc_name: str, use_embeddings: bool):
+async def ensure_indexed_from_postgres(doc_name: str):
+    """
+    --from-postgres mode: source this filing's chunks/embeddings/BM25 from
+    Postgres exclusively, never from local disk -- see the _PG_INDEX_CACHE
+    docstring above for why this doesn't go through retrieval.get_index()
+    at all. Returns None (scored as a skip, same as a missing local file)
+    if this doc_name was never migrated into Postgres.
+    """
+    if doc_name in _PG_INDEX_CACHE:
+        return _PG_INDEX_CACHE[doc_name]
+    idx = await hydrate_from_postgres(doc_name, cache_locally=False)
+    _PG_INDEX_CACHE[doc_name] = idx  # cache the None too, so a missing doc isn't re-queried every question
+    return idx
+
+
+async def ensure_indexed(doc_name: str, use_embeddings: bool, from_postgres: bool = False):
+    if from_postgres:
+        return await ensure_indexed_from_postgres(doc_name)
+
     idx = get_index(doc_name)
     if idx is not None and idx.is_indexed() and (not use_embeddings or idx.has_vector_index()):
         return idx
@@ -436,13 +462,26 @@ async def ensure_indexed(doc_name: str, use_embeddings: bool):
     return await ingest_filing(str(filepath), doc_name, use_embeddings=use_embeddings)
 
 
-async def run_eval(limit, doc_filter, use_embeddings, embedding_model_arg=None, reverse=False):
+async def run_eval(limit, doc_filter, use_embeddings, embedding_model_arg=None, reverse=False, from_postgres=False):
     if embedding_model_arg:
         os.environ["EMBEDDING_MODEL"] = embedding_model_arg
     embedding_model = get_embedding_model_name()
+    if from_postgres:
+        if not pg.is_configured():
+            print("--from-postgres was passed but DATABASE_URL is not set -- nothing to source from Postgres with.")
+            return
+        # Postgres only ever stores 384-dim ("normal") vectors -- see
+        # postgres_store.EMBEDDING_DIM. Silently scoring against a
+        # different embedding model here would just produce a wall of
+        # skips with no explanation, so fail loud instead.
+        if embedding_model != "normal":
+            print(f"--from-postgres requires EMBEDDING_MODEL=normal (got {embedding_model!r}).")
+            return
     questions = load_questions(limit=limit, doc_filter=doc_filter, reverse=reverse)
     print(f"Loaded {len(questions)} practice questions.\n")
     print(f"Embedding model: {embedding_model}\n")
+    if from_postgres:
+        print("Source: Postgres (--from-postgres) -- local data/indexes/ and data/filings/ are not used.\n")
 
     results = []
     score = 0
@@ -455,7 +494,7 @@ async def run_eval(limit, doc_filter, use_embeddings, embedding_model_arg=None, 
         evidence = q.get("evidence") or [{}]
         gold_page = evidence[0].get("evidence_page_num")
 
-        index = await ensure_indexed(doc_name, use_embeddings)
+        index = await ensure_indexed(doc_name, use_embeddings, from_postgres=from_postgres)
         if index is None or not index.is_indexed():
             print(f"[{i}/{len(questions)}] SKIP (filing not found): {doc_name}")
             counts["skipped"] += 1
@@ -591,9 +630,13 @@ def main():
     parser.add_argument("--no-embed", action="store_true", help="Skip dense embeddings, BM25-only.")
     parser.add_argument("--embedding-model", choices=["normal", "finlang", "financesmall"], default=None, help="Embedding model override. Defaults to EMBEDDING_MODEL or normal.")
     parser.add_argument("--reverse", action="store_true", help="Start from the last question in practice-questions.jsonl and work backward, instead of front-to-back.")
+    parser.add_argument("--from-postgres", action="store_true", help="Source every filing's chunks/embeddings from Postgres (DATABASE_URL) instead of local data/indexes/ and data/filings/ -- verifies the migrated data actually works end to end, not just that it exists. Requires EMBEDDING_MODEL=normal.")
     args = parser.parse_args()
 
-    asyncio.run(run_eval(limit=args.limit, doc_filter=args.doc, use_embeddings=not args.no_embed, embedding_model_arg=args.embedding_model, reverse=args.reverse))
+    asyncio.run(run_eval(
+        limit=args.limit, doc_filter=args.doc, use_embeddings=not args.no_embed,
+        embedding_model_arg=args.embedding_model, reverse=args.reverse, from_postgres=args.from_postgres,
+    ))
 
 
 if __name__ == "__main__":
