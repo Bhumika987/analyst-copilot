@@ -1,0 +1,508 @@
+<title>Answer Scoring Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+<style>
+  /* ============================================================
+     Analyst Copilot — Answer Scoring Model
+     Committed single light theme (mirrors the product UI); every
+     color is painted explicitly so the page holds on any ground.
+     ============================================================ */
+  :root {
+    --ground:      #F8F9FB;
+    --card:        #FFFFFF;
+    --card-2:      #FCFCFD;
+
+    --ink:         #111827;
+    --ink-2:       #6B7280;
+    --ink-3:       #9CA3AF;
+
+    --line:        #D1D5DB;
+    --line-lt:     #E5E7EB;
+
+    --teal:        #10B981;
+    --teal-accent: #06D6A0;
+    --teal-deep:   #047857;
+    --teal-wash:   #ECFDF5;
+    --teal-edge:   rgba(16,185,129,.32);
+
+    --gray:        #9CA3AF;
+    --gray-wash:   #F3F4F6;
+    --gray-edge:   #D8DBE0;
+
+    --amber:       #F59E0B;
+    --amber-wash:  #FEF3C7;
+    --amber-ink:   #92400E;
+    --amber-ink-2: #78350F;
+
+    --red:         #EF4444;
+    --red-wash:    #FEF2F2;
+    --red-edge:    rgba(239,68,68,.32);
+    --red-ink:     #991B1B;
+    --red-ink-2:   #7F1D1D;
+
+    --shadow:      0 1px 3px rgba(17,24,39,.07), 0 10px 30px -8px rgba(17,24,39,.10);
+
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 880px; margin: 0 auto; padding: 60px 24px 96px; }
+
+  /* ---------- page header ---------- */
+  .page-head { margin-bottom: 44px; }
+  .kicker {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--teal-deep);
+  }
+  .kicker::before {
+    content: ""; width: 18px; height: 2px; background: var(--teal); border-radius: 2px;
+  }
+  .page-head h1 {
+    margin: 14px 0 0; font-size: 31px; font-weight: 800;
+    letter-spacing: -.022em; line-height: 1.15; text-wrap: balance;
+  }
+  .page-head p {
+    margin: 14px 0 0; max-width: 64ch; font-size: 15px;
+    color: var(--ink-2); line-height: 1.65;
+  }
+  .page-head strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- stack ---------- */
+  .stack { display: flex; flex-direction: column; gap: 32px; }
+
+  /* ---------- scenario card ---------- */
+  .sc {
+    background: var(--card);
+    border: 1px solid var(--line-lt);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .sc__inner { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+  .sc__eyebrow {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .sc__head { display: flex; align-items: flex-start; gap: 16px; }
+  .sc__headmain { flex: 1; min-width: 0; }
+  .sc__title { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+  .sc__sub { margin-top: 4px; font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+
+  .badge {
+    width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-weight: 700; font-size: 18px;
+    color: #fff; letter-spacing: -.02em;
+  }
+
+  .sc__flag {
+    flex-shrink: 0; display: flex; flex-direction: column;
+    align-items: flex-end; gap: 5px; text-align: right;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+    white-space: nowrap;
+  }
+  .sc__flag .note {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* outcome theming */
+  .sc--plus  { border-color: var(--teal-edge); }
+  .sc--plus  .sc__inner { background: linear-gradient(180deg, var(--teal-wash), var(--card) 150px); }
+  .sc--plus  .badge { background: linear-gradient(148deg, var(--teal-accent), var(--teal)); box-shadow: 0 4px 14px rgba(6,214,160,.35); }
+  .sc--plus  .chip { background: #DCFCE7; color: var(--teal-deep); }
+
+  .sc--zero  { border-color: var(--gray-edge); }
+  .sc--zero  .sc__inner { background: linear-gradient(180deg, var(--gray-wash), var(--card) 150px); }
+  .sc--zero  .badge { background: var(--gray); box-shadow: 0 4px 14px rgba(156,163,175,.35); }
+  .sc--zero  .chip { background: #EAECEF; color: var(--ink-2); }
+
+  .sc--minus { border-color: var(--red-edge); }
+  .sc--minus .sc__inner { background: linear-gradient(180deg, var(--red-wash), var(--card) 150px); }
+  .sc--minus .badge { background: var(--red); box-shadow: 0 4px 14px rgba(239,68,68,.32); }
+  .sc--minus .chip { background: #FEE2E2; color: #B91C1C; }
+
+  /* ---------- answer panel (scenario 1) ---------- */
+  .answer-panel {
+    background: linear-gradient(135deg, var(--teal), var(--teal-accent));
+    border-radius: 11px; padding: 20px 22px; color: #fff;
+  }
+  .answer-panel .lbl {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: .11em; text-transform: uppercase; color: rgba(255,255,255,.82);
+  }
+  .answer-panel .num {
+    margin-top: 8px; font-size: 48px; font-weight: 700;
+    letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums;
+  }
+  .answer-panel .cap {
+    margin-top: 10px; font-size: 12.5px; color: rgba(255,255,255,.9);
+  }
+
+  /* ---------- confidence breakdown ---------- */
+  .conf-block .conf-head {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+    margin-bottom: 12px;
+  }
+  .conf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
+  .conf__top {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    font-size: 12.5px; color: var(--ink-2);
+  }
+  .conf__val {
+    font-family: var(--mono); font-weight: 600; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .conf--total .conf__top { color: var(--ink); font-weight: 600; }
+  .conf__track {
+    height: 5px; margin-top: 7px; border-radius: 3px;
+    background: var(--line-lt); overflow: hidden;
+  }
+  .conf__fill {
+    height: 100%; border-radius: 3px;
+    background: linear-gradient(90deg, var(--teal), var(--teal-accent));
+  }
+
+  /* ---------- evidence box ---------- */
+  .evidence {
+    border-left: 3px solid var(--teal);
+    background: var(--teal-wash);
+    border-radius: 9px; padding: 13px 15px;
+  }
+  .evidence__row {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    font-size: 13px; color: var(--ink);
+  }
+  .evidence__src { font-weight: 600; }
+  .evidence__type { color: var(--ink-3); font-size: 12px; }
+  .sep { color: var(--ink-3); }
+  .page-badge {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    color: #fff; background: var(--teal); padding: 3px 8px; border-radius: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .evidence__quote {
+    margin-top: 9px; font-size: 12.5px; line-height: 1.6; color: var(--teal-deep);
+    font-style: italic;
+  }
+
+  /* ---------- callouts ---------- */
+  .callout { border-radius: 11px; padding: 17px 19px; }
+  .callout h4 { margin: 0 0 11px; font-size: 14px; font-weight: 700; }
+  .callout ul { margin: 0; padding-left: 19px; display: flex; flex-direction: column; gap: 7px; }
+  .callout li { font-size: 13.5px; line-height: 1.55; }
+  .callout li b { font-weight: 700; }
+  .callout--amber { background: var(--amber-wash); border: 1px solid var(--amber); }
+  .callout--amber h4 { color: var(--amber-ink); }
+  .callout--amber li { color: var(--amber-ink-2); }
+  .callout--amber li::marker { color: var(--amber); }
+  .callout--red { background: var(--red-wash); border: 1px solid var(--red-edge); }
+  .callout--red h4 { color: var(--red-ink); }
+  .callout--red li { color: var(--red-ink-2); }
+  .callout--red li::marker { color: var(--red); }
+
+  /* ---------- suggestions ---------- */
+  .suggest {
+    background: var(--gray-wash); border: 1px solid var(--line-lt);
+    border-radius: 11px; padding: 16px 18px;
+  }
+  .suggest .lbl {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 11px; }
+  .pill-btn {
+    font-family: var(--sans); font-size: 12.5px; font-weight: 600;
+    color: var(--ink-2); background: var(--card);
+    border: 1px solid var(--line); border-radius: 7px;
+    padding: 6px 12px; cursor: pointer;
+    transition: border-color .14s ease, color .14s ease, background .14s ease;
+  }
+  .pill-btn:hover { border-color: var(--teal); color: var(--teal-deep); background: var(--teal-wash); }
+
+  /* ---------- rubric table ---------- */
+  .rubric {
+    background: var(--card); border: 1px solid var(--line-lt);
+    border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+    margin-top: 40px;
+  }
+  .rubric__cap { padding: 20px 22px 0; }
+  .rubric__cap .kicker { color: var(--ink-3); }
+  .rubric__cap h2 {
+    margin: 12px 0 16px; font-size: 18px; font-weight: 700; letter-spacing: -.01em;
+  }
+  .tbl-scroll { overflow-x: auto; }
+  table.rubric__t { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+  .rubric__t thead th {
+    background: #111827; color: #E5E7EB; text-align: left;
+    padding: 13px 18px; font-family: var(--mono);
+    font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .rubric__t thead th:nth-child(2) { text-align: center; }
+  .rubric__t td { padding: 15px 18px; border-top: 1px solid var(--line-lt); vertical-align: top; color: var(--ink); }
+  .rubric__t td:nth-child(2) { text-align: center; white-space: nowrap; }
+  .rubric__t td:nth-child(3) { color: var(--ink-2); font-size: 13px; }
+  .rubric__t tbody tr:nth-child(even) { background: var(--card-2); }
+  .rubric__t tbody tr.is-danger { background: var(--red-wash); }
+  .rubric__t tbody tr.is-danger td { color: var(--red-ink-2); }
+  .ret { font-weight: 600; }
+  .ret code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--gray-wash); padding: 1px 5px; border-radius: 4px;
+  }
+  .score-tag {
+    display: inline-block; font-family: var(--mono); font-weight: 700;
+    font-size: 13px; padding: 3px 10px; border-radius: 7px;
+    font-variant-numeric: tabular-nums;
+  }
+  .score-tag--plus  { background: #DCFCE7; color: var(--teal-deep); }
+  .score-tag--zero  { background: #EAECEF; color: var(--ink-2); }
+  .score-tag--amber { background: var(--amber-wash); color: var(--amber-ink); }
+  .score-tag--minus { background: #FEE2E2; color: #B91C1C; }
+
+  .foot {
+    margin-top: 28px; font-size: 12.5px; color: var(--ink-3);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .foot .mark {
+    width: 20px; height: 20px; border-radius: 5px; flex-shrink: 0;
+    background: linear-gradient(150deg, var(--teal-accent), var(--teal));
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  /* entrance */
+  @media (prefers-reduced-motion: no-preference) {
+    .sc, .rubric { animation: rise .5s cubic-bezier(.2,.7,.3,1) both; }
+    .stack .sc:nth-child(2) { animation-delay: .06s; }
+    .stack .sc:nth-child(3) { animation-delay: .12s; }
+    .rubric { animation-delay: .18s; }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  }
+
+  @media (max-width: 560px) {
+    .wrap { padding: 44px 16px 72px; }
+    .page-head h1 { font-size: 25px; }
+    .sc__head { flex-wrap: wrap; }
+    .sc__flag { align-items: flex-start; text-align: left; width: 100%; }
+    .conf-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="page-head">
+    <span class="kicker">Analyst Copilot</span>
+    <h1>What each answer is worth</h1>
+    <p>
+      The grader pays <strong>+1</strong> for a correct answer cited to the right place, <strong>0</strong>
+      for an honest &ldquo;not found,&rdquo; and <strong>&minus;1</strong> for a confident wrong figure. A system that
+      guesses finishes below zero; one that always abstains finishes at exactly zero. Analyst Copilot is
+      built to earn the +1 it can prove and to take a deliberate 0 everywhere else &mdash; it is engineered so
+      the &minus;1 row never fires.
+    </p>
+  </header>
+
+  <div class="stack">
+
+    <!-- ============ SCENARIO 1 : +1 ============ -->
+    <section class="sc sc--plus">
+      <div class="sc__inner">
+        <div class="sc__eyebrow">Scenario 01 &middot; Target outcome</div>
+
+        <div class="sc__head">
+          <div class="badge" aria-hidden="true">+1</div>
+          <div class="sc__headmain">
+            <div class="sc__title">Correct Answer + Correct Location</div>
+            <div class="sc__sub">Ready to use in valuation models</div>
+          </div>
+          <div class="sc__flag">
+            <span class="chip">&#10003; High Confidence</span>
+            <span class="note">97% overall</span>
+          </div>
+        </div>
+
+        <div class="answer-panel">
+          <div class="lbl">Revenue Change YoY</div>
+          <div class="num">1.9%</div>
+          <div class="cap">Total revenues $523,964M in FY2020 vs $514,405M in FY2019</div>
+        </div>
+
+        <div class="conf-block">
+          <div class="conf-head">Confidence breakdown</div>
+          <div class="conf-grid">
+            <div class="conf">
+              <div class="conf__top"><span>Answer Correctness</span><span class="conf__val">99%</span></div>
+              <div class="conf__track"><div class="conf__fill" style="width:99%"></div></div>
+            </div>
+            <div class="conf">
+              <div class="conf__top"><span>Location Accuracy</span><span class="conf__val">98%</span></div>
+              <div class="conf__track"><div class="conf__fill" style="width:98%"></div></div>
+            </div>
+            <div class="conf">
+              <div class="conf__top"><span>Source Reliability</span><span class="conf__val">100%</span></div>
+              <div class="conf__track"><div class="conf__fill" style="width:100%"></div></div>
+            </div>
+            <div class="conf conf--total">
+              <div class="conf__top"><span>Overall Score</span><span class="conf__val">97%</span></div>
+              <div class="conf__track"><div class="conf__fill" style="width:97%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="evidence">
+          <div class="evidence__row">
+            <span class="evidence__src">Item 7: MD&amp;A</span>
+            <span class="sep">&middot;</span>
+            <span class="page-badge">Page 35</span>
+            <span class="sep">&middot;</span>
+            <span class="evidence__type">SEC Filing</span>
+          </div>
+          <div class="evidence__quote">
+            &ldquo;Total revenues &hellip; $523,964 &hellip; Percentage change in total revenues from previous
+            fiscal year 1.9%&rdquo;
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SCENARIO 2 : 0 ============ -->
+    <section class="sc sc--zero">
+      <div class="sc__inner">
+        <div class="sc__eyebrow">Scenario 02 &middot; Safe fallback</div>
+
+        <div class="sc__head">
+          <div class="badge" aria-hidden="true">0</div>
+          <div class="sc__headmain">
+            <div class="sc__title">Not Found in This Filing</div>
+            <div class="sc__sub">Declining to answer rather than risk a wrong figure</div>
+          </div>
+          <div class="sc__flag">
+            <span class="chip">&#8856; Low Confidence</span>
+            <span class="note">&lt; 85% threshold</span>
+          </div>
+        </div>
+
+        <div class="callout callout--amber">
+          <h4>Why we&rsquo;re declining to answer:</h4>
+          <ul>
+            <li>Information not clearly stated in the filing</li>
+            <li>Multiple interpretations possible</li>
+            <li>Would require calculation or inference</li>
+            <li>Confidence score dropped below the 85% threshold</li>
+          </ul>
+        </div>
+
+        <div class="suggest">
+          <span class="lbl">Try instead:</span>
+          <div class="btn-row">
+            <button class="pill-btn" type="button">Check All Filings</button>
+            <button class="pill-btn" type="button">Rephrase question</button>
+            <button class="pill-btn" type="button">View MD&amp;A section</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SCENARIO 3 : -1 ============ -->
+    <section class="sc sc--minus">
+      <div class="sc__inner">
+        <div class="sc__eyebrow">Scenario 03 &middot; Avoided by design</div>
+
+        <div class="sc__head">
+          <div class="badge" aria-hidden="true">&minus;1</div>
+          <div class="sc__headmain">
+            <div class="sc__title">Confidently Wrong Answer</div>
+            <div class="sc__sub">Hallucinated number &mdash; flows straight into a valuation model</div>
+          </div>
+          <div class="sc__flag">
+            <span class="chip">&#10007; Critical Failure</span>
+            <span class="note">Unacceptable risk</span>
+          </div>
+        </div>
+
+        <div class="callout callout--red">
+          <h4>How we prevent &minus;1 scores:</h4>
+          <ul>
+            <li><b>Only cite verifiable sources:</b> every number is lifted from SEC filing text</li>
+            <li><b>Never hallucinate:</b> if confidence &lt; 85%, return &ldquo;not found&rdquo;</li>
+            <li><b>Always show location:</b> page + section + exact quote</li>
+            <li><b>Separate answer from confidence:</b> correctness and location must both score high</li>
+            <li><b>Reject ambiguous questions:</b> ask for clarification instead of guessing</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ============ RUBRIC TABLE ============ -->
+  <section class="rubric">
+    <div class="rubric__cap">
+      <span class="kicker">Hackathon rubric</span>
+      <h2>The four outcomes, scored</h2>
+    </div>
+    <div class="tbl-scroll">
+      <table class="rubric__t">
+        <thead>
+          <tr>
+            <th>What your system returns</th>
+            <th>Score</th>
+            <th>When this happens</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ret">Correct answer, correct location</td>
+            <td><span class="score-tag score-tag--plus">+1</span></td>
+            <td>Verified in the SEC filing with page + section</td>
+          </tr>
+          <tr>
+            <td class="ret"><code>"Not found in this filing"</code></td>
+            <td><span class="score-tag score-tag--zero">0</span></td>
+            <td>Information not in the filing, or confidence &lt; 85%</td>
+          </tr>
+          <tr>
+            <td class="ret">Correct answer, wrong location</td>
+            <td><span class="score-tag score-tag--amber">0</span></td>
+            <td>Answer is right, but the cited page / section is wrong</td>
+          </tr>
+          <tr class="is-danger">
+            <td class="ret">Confidently wrong answer</td>
+            <td><span class="score-tag score-tag--minus">&minus;1</span></td>
+            <td>Hallucinated number stated with confidence</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span class="mark" aria-hidden="true">
+      <svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M3 15.5h14M5 13V8M10 13V4M15 13v-6" stroke="#05261C" stroke-width="2.4" stroke-linecap="round"/></svg>
+    </span>
+    Analyst Copilot &mdash; the marks are in knowing the difference between an answer you can prove and one you cannot.
+  </div>
+
+</div>

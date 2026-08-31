@@ -7,12 +7,12 @@ from typing import List, Optional
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ingest import ingest_filing_stream, ingest_bulk_filings_stream, hydrate_from_postgres
-from llm import answer_question, get_embedding, stream_answer
+from llm import answer_question, get_embedding, stream_answer, _safe_print
 from retrieval import get_index, list_indexed_docs, cross_filing_hybrid_search
 from config import get_embedding_model_name
 import postgres_store as pg
@@ -132,6 +132,108 @@ async def get_filing_page(doc_name: str, page_num: int):
     }
 
 
+def _resolve_source_file(doc_name: str) -> Optional[Path]:
+    """Locate the raw uploaded .htm for an indexed filing so the analyst can open
+    the exact document a citation points at."""
+    idx = get_index(doc_name)
+    if idx is not None:
+        fname = (idx.metadata or {}).get("source_filename")
+        if fname:
+            candidate = UPLOAD_DIR / fname
+            if candidate.exists():
+                return candidate
+    for ext in (".htm", ".html"):
+        candidate = UPLOAD_DIR / f"{doc_name}{ext}"
+        if candidate.exists():
+            return candidate
+    for candidate in UPLOAD_DIR.glob("*.htm*"):
+        if candidate.stem == doc_name:
+            return candidate
+    return None
+
+
+# Injected into the served filing: jumps to a printed page number by scanning the
+# same <hr/> page breaks the parser keys off, and highlights the cited passage.
+_VIEWER_SNIPPET = """
+<style>
+  #__ac_banner{position:fixed;top:0;left:0;right:0;z-index:2147483647;
+    font:600 13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;
+    background:#0F1419;color:#E6E8EC;padding:9px 16px;
+    box-shadow:0 2px 12px rgba(0,0,0,.25);display:flex;gap:10px;align-items:center}
+  #__ac_banner b{color:#06D6A0}
+  #__ac_banner button{margin-left:auto;background:rgba(255,255,255,.1);border:0;
+    color:#E6E8EC;font:inherit;padding:4px 10px;border-radius:6px;cursor:pointer}
+  mark.__ac_hit{background:#FEF08A;color:#111;padding:1px 2px;border-radius:2px}
+  body{scroll-padding-top:60px}
+</style>
+<div id="__ac_banner">Analyst Copilot &mdash; <span id="__ac_msg">locating citation&hellip;</span>
+  <button onclick="document.getElementById('__ac_banner').remove()">Dismiss</button></div>
+<script>
+(function(){
+  var params=new URLSearchParams(location.hash.slice(1)||location.search.slice(1));
+  var page=parseInt(params.get('page'),10);
+  var quote=(params.get('q')||'').trim().toLowerCase().slice(0,50);
+  var msg=document.getElementById('__ac_msg');
+  function digits(t){return (t||'').replace(/\\s+/g,'').match(/^[0-9]{1,4}$/)?parseInt(t,10):null;}
+  function findPage(n){
+    var hrs=document.getElementsByTagName('hr');
+    for(var i=0;i<hrs.length;i++){
+      var el=hrs[i], hops=0, node=el;
+      while(node && hops<8){
+        node=node.previousElementSibling||node.parentElement;
+        if(!node) break;
+        var d=digits(node.textContent);
+        if(d===n) return hrs[i];
+        if((node.textContent||'').trim().length>25) break;
+        hops++;
+      }
+    }
+    return null;
+  }
+  function highlight(){
+    if(!quote) return false;
+    var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
+    var n;
+    while((n=w.nextNode())){
+      var idx=(n.nodeValue||'').toLowerCase().indexOf(quote.slice(0,20));
+      if(idx>-1 && n.parentElement && !n.parentElement.closest('#__ac_banner')){
+        var m=document.createElement('mark'); m.className='__ac_hit'; m.textContent=n.nodeValue;
+        n.parentElement.replaceChild(m,n);
+        m.scrollIntoView({block:'center'});
+        return true;
+      }
+    }
+    return false;
+  }
+  setTimeout(function(){
+    if(highlight()){ msg.innerHTML='jumped to cited passage'; return; }
+    if(page){
+      var target=findPage(page);
+      if(target){ target.scrollIntoView({block:'start'}); msg.innerHTML='jumped to <b>page '+page+'</b>'; return; }
+      msg.innerHTML='page '+page+' &mdash; scroll to locate (printed pagination varies)';
+      return;
+    }
+    msg.innerHTML='citation not auto-located &mdash; use browser find';
+  },120);
+})();
+</script>
+"""
+
+
+@app.get("/api/filings/{doc_name}/source", response_class=HTMLResponse)
+async def get_filing_source(doc_name: str, page: Optional[int] = None, q: Optional[str] = None):
+    src = _resolve_source_file(doc_name)
+    if src is None:
+        raise HTTPException(status_code=404, detail=f"No source document on file for '{doc_name}'.")
+    raw = src.read_text(encoding="utf-8", errors="replace")
+    lower = raw.lower()
+    insert_at = lower.rfind("</body>")
+    if insert_at == -1:
+        insert_at = lower.rfind("</html>")
+    doc = raw if insert_at == -1 else raw[:insert_at] + _VIEWER_SNIPPET + raw[insert_at:]
+    return HTMLResponse(content=doc)
+
+
 @app.post("/api/filings/upload")
 async def upload_filing(file: UploadFile = File(...), doc_name: Optional[str] = Form(None)):
     filename = file.filename or ""
@@ -205,16 +307,23 @@ async def chat(req: ChatRequest):
 
         async for event in stream_answer(req.question, target_doc, results):
             if event.get("type") == "result":
+                # Debug logging only - must never be able to take the request
+                # down. A model answer can contain characters (narrow
+                # no-break spaces, curly quotes, em dashes) the Windows
+                # console's cp1252 codec can't encode; a bare print() on
+                # those crashes mid-request with a 500, discarding an
+                # otherwise-good answer. _safe_print replaces anything
+                # unencodable instead of raising.
                 print("\n==================================================")
                 print("[FINAL RESPONSE] (Endpoint: /api/chat)")
-                print(f"found: {event.get('found')}")
-                print(f"answer: {event.get('answer')}")
-                print(f"confidence: {event.get('confidence')}")
-                print(f"sources: {event.get('sources')}")
+                _safe_print(f"found: {event.get('found')}")
+                _safe_print(f"answer: {event.get('answer')}")
+                _safe_print(f"confidence: {event.get('confidence')}")
+                _safe_print(f"sources: {event.get('sources')}")
                 dbg = event.get("debug_info", {})
-                print(f"retrieval_status: {dbg.get('retrieval_status')}")
+                _safe_print(f"retrieval_status: {dbg.get('retrieval_status')}")
                 if event.get("error"):
-                    print(f"error: {event.get('error')}")
+                    _safe_print(f"error: {event.get('error')}")
                 print("==================================================\n")
             yield _sse(event)
 
@@ -250,14 +359,14 @@ async def chat_sync(req: ChatRequest):
 
     print("\n==================================================")
     print("[FINAL RESPONSE] (Endpoint: /api/chat/sync)")
-    print(f"found: {response.get('found')}")
-    print(f"answer: {response.get('answer')}")
-    print(f"confidence: {response.get('confidence')}")
-    print(f"sources: {response.get('sources')}")
+    _safe_print(f"found: {response.get('found')}")
+    _safe_print(f"answer: {response.get('answer')}")
+    _safe_print(f"confidence: {response.get('confidence')}")
+    _safe_print(f"sources: {response.get('sources')}")
     dbg = response.get("debug_info", {})
-    print(f"retrieval_status: {dbg.get('retrieval_status')}")
+    _safe_print(f"retrieval_status: {dbg.get('retrieval_status')}")
     if response.get("error"):
-        print(f"error: {response.get('error')}")
+        _safe_print(f"error: {response.get('error')}")
     print("==================================================\n")
 
     return response
