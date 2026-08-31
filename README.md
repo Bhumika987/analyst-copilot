@@ -33,7 +33,7 @@ note and technical writeup.
 | Ability to decline when evidence is weak/absent | ✅ rule-based gate runs before any LLM call — see [DOCUMENTATION.md §2.4](DOCUMENTATION.md#24-evidence-sufficiency-gate) |
 | Git repo + README that runs it from scratch | ✅ this file |
 | Running system, live for the session | see [DEPLOYMENT.md](DEPLOYMENT.md) |
-| One-page approach note (tried / measured / kept / threw away) | ✅ [Approach note](#approach-note) below, full detail in [DOCUMENTATION.md](DOCUMENTATION.md) |
+| One-page approach note (tried / measured / kept / threw away) | ✅ standalone: [APPROACH_NOTE.pdf](APPROACH_NOTE.pdf) / [APPROACH_NOTE.md](APPROACH_NOTE.md) — condensed version also inline [below](#approach-note) |
 | Practice set (136 Qs) as self-eval | ✅ [`scripts/evaluate.py`](scripts/evaluate.py), rubric implemented exactly — see [Running the evaluator](#running-the-evaluator) |
 
 ## Quick start
