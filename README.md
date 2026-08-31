@@ -214,50 +214,42 @@ curl -X POST http://localhost:8000/api/chat/sync \
   -d "{\"question\": \"What was FY2018 capital expenditure for 3M?\", \"doc_name\": \"3M_2018_10K\", \"top_k\": 5}"
 ```
 
-# Analyst Copilot — Approach Note
+## Approach note
 
-A chatbot answering analyst questions over SEC filings, built for a rubric
-where a confidently wrong answer (**−1**) costs twice what a correct one
-(**+1**) earns, and abstaining ("not found") is always **0**. Every design
-choice below optimizes for that asymmetry: the system is built to abstain
-rather than guess.
+**What we tried:** Pure dense retrieval first — dropped as the primary
+signal because even a real sentence-embedding model (BGE-small, run locally
+via sentence-transformers) is too weak on its own for numeric financial
+lookups, where exact terms ("capital expenditure", "$1,577") matter more
+than semantic similarity. BM25 became the primary signal, with dense search
+kept as a secondary fusion input via RRF to catch paraphrased questions, and
+a cross-encoder reranker (or a deterministic structural/boost fallback when
+the reranker model isn't available locally) on top.
 
-## What we tried
+**What we measured:** Retrieval score distributions against the practice
+set — this is what led us to replace a single numeric confidence threshold
+with `evaluate_retrieval_status()`'s rule-based checks (concept, statement
+type, fiscal year, numeric value) in `llm.py`, so we abstain before ever
+calling the LLM when the top chunks don't actually satisfy the question.
+This is the single biggest lever on the score, since every wrong answer
+costs twice what a right answer earns.  (see
+[DOCUMENTATION.md §5](DOCUMENTATION.md#5-measurement--evaluation-methodology-and-example-output)
+for the honest caveats and full numbers).
 
-Pure dense retrieval first — dropped as the primary signal because even a
-real sentence-embedding model (BGE-small, run locally) is too weak on its
-own for numeric financial lookups, where exact terms ("capital
-expenditure", "$1,577") matter more than semantic similarity. BM25 became
-the primary signal, with dense search kept as a secondary Reciprocal Rank
-Fusion input to catch paraphrased questions, topped with a cross-encoder
-reranker (or a deterministic structural/boost fallback when the reranker
-model isn't available locally).
+**What we kept:** Page-aware chunking with atomic tables (a split table row
+is a guaranteed wrong number), and a strict "quote the source or say
+NOT_FOUND" system prompt.
 
-## What we measured
+**What we threw away:** LLM self-reported confidence as a gating signal — it
+was overconfident even on thin evidence. We also removed a single numeric
+`CONFIDENCE_THRESHOLD` score-gate that had decayed to an inert 0.001 and was
+no longer doing anything; `evaluate_retrieval_status()`'s rule-based checks
+are the actual, live gate and a more honest one than either.
 
-Retrieval score distributions against the practice set — this is what led
-us to replace a single numeric confidence threshold with a rule-based
-evidence gate (concept match, statement/section match, fiscal-year match,
-numeric-value presence) that runs *before* any LLM call, so the system
-abstains when the top retrieved evidence doesn't actually satisfy the
-question. This is the single biggest lever on the score, since every wrong
-answer costs twice what a right one earns.
-
-## What we kept
-
-Page-aware chunking with atomic tables (a split table row is a guaranteed
-wrong number), and a strict "quote the source or say NOT_FOUND" system
-prompt that forbids the model from using outside knowledge.
-
-## What we threw away
-
-LLM self-reported confidence as a gating signal — it stayed overconfident
-even on thin evidence. A single numeric confidence-threshold gate that had
-decayed to an inert, unused constant. Three of six LLM providers this
-project carried at points (Groq — hit request-size limits once retrieval
-moved to page-level chunking; Cerebras — rate limits/disconnects on ~10%
-of a real eval run; a direct Anthropic integration — subsumed by serving
-the same Claude models through AWS Bedrock instead).
-
-Full architecture, formulas, notation, and the complete evidence trail for
-every bug above: see `DOCUMENTATION.md` in the project repository.
+**Bugs found and fixed, evidenced against real filings and gold answers —
+not guessed:** page-citation drift, a NOT_FOUND-parsing bug that was
+silently converting safe abstains into penalized wrong answers, a
+cross-encoder score override, a duplicate-disclosure retrieval trap,
+non-calendar fiscal-year column confusion, a gain/loss sign-convention
+miss, and a dead synonym-expansion code path. Each one is written up in
+full — the specific filing, the specific gold answer, the fix — in
+**[DOCUMENTATION.md §6](DOCUMENTATION.md#6-bugs-found-and-fixed-the-approach-notes-evidence-trail)**.
