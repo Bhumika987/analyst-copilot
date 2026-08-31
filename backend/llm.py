@@ -1,5 +1,6 @@
 """
-Groq LLM integration and answer generation.
+Multi-provider LLM integration (Fireworks / AWS Bedrock / Azure OpenAI,
+selected via LLM_PROVIDER) and answer generation.
 
 Two safety mechanisms matter more than anything else here, because the
 scoring rubric punishes a wrong answer (-1) far harder than it rewards a
@@ -40,23 +41,20 @@ for _stream in (sys.stdout, sys.stderr):
 
 from embedding_service import get_embedding_provider
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "openai/gpt-oss-120b"
-
 FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
-CEREBRAS_API_URL = "https://api.cerebras.ai/v1/chat/completions"
 
 # .env keys this module reads on startup, mirroring config.py's pattern for
 # EMBEDDING_MODEL: first environment variable already set wins, .env only
 # fills in what isn't.
 _ENV_KEYS = (
-    "GROQ_API_KEY", "ANTHROPIC_API_KEY", "LLM_PROVIDER", "CLAUDE_MODEL",
+    "LLM_PROVIDER",
     # Bedrock (both "bedrock" and "bedrock_openai"): AWS_REGION is required
     # (no fallback), and both providers call Bedrock's native HTTP endpoints
     # directly with an Amazon Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) --
     # no AWS access key pair, boto3, or IAM role needed.
     "AWS_REGION", "BEDROCK_MODEL", "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_OPENAI_MODEL",
-    "FIREWORKS_API_KEY", "FIREWORKS_MODEL", "CEREBRAS_API_KEY", "CEREBRAS_MODEL",
+    "FIREWORKS_API_KEY", "FIREWORKS_MODEL",
+    "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_API_VERSION",
 )
 
 
@@ -75,42 +73,37 @@ def _load_env():
                 pass
 
 _load_env()
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AWS_REGION = os.environ.get("AWS_REGION", "")
 AWS_BEARER_TOKEN_BEDROCK = os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
 FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY", "")
-CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
 
-# Which LLM backend answer_question()/stream_answer() call. "groq" (default)
-# keeps the existing free-tier path; "claude" routes through the first-party
-# Anthropic API; "bedrock" routes Claude through Amazon Bedrock's native
-# Messages route instead -- set LLM_PROVIDER=bedrock if you want AWS billing
-# rather than an ANTHROPIC_API_KEY. "bedrock_openai", "fireworks", and
-# "cerebras" are the same model family on three other hosts: all call
-# OpenAI's open-weight gpt-oss-120b -- the same model this project's Groq
-# default already serves -- through an OpenAI-compatible Chat Completions
-# endpoint, so you get the current Groq behavior/quality without Groq's
-# free-tier rate limit, billed through AWS/Fireworks/Cerebras instead. Both
-# Bedrock providers authenticate with a Bedrock API key
+# Which LLM backend answer_question()/stream_answer() call. Three supported
+# providers, chosen deliberately (see README's LLM provider section for the
+# evidence behind this list -- other providers this codebase has carried at
+# points, Groq/Claude-direct/Cerebras, were dropped: Groq hit request-size
+# limits once this project moved to page-level chunking, Cerebras hit
+# rate limits/disconnects on ~10% of a real eval run, and Claude-direct was
+# subsumed by "bedrock", which serves the same Claude models billed through
+# AWS instead of a separate Anthropic API key):
+#   "fireworks"  -- OpenAI's open-weight gpt-oss-120b via Fireworks AI.
+#   "bedrock"    -- Claude models via Amazon Bedrock's native Messages route.
+#   "bedrock_openai" -- gpt-oss-120b via Bedrock's OpenAI-compatible route
+#                    (same model as "fireworks", billed through AWS instead).
+#   "azure"      -- an OpenAI-compatible model deployed on Azure OpenAI
+#                    Service (deployment name, not a bare model id, selects
+#                    the model -- see AZURE_OPENAI_DEPLOYMENT below).
+# Both Bedrock providers authenticate with a Bedrock API key
 # (AWS_BEARER_TOKEN_BEDROCK) over plain HTTPS -- no boto3/AWS SigV4
-# credentials required. Claude is meaningfully more capable than gpt-oss-120b,
-# but it is a paid, metered API either way (no free tier like Groq), so
-# switching to "claude" or "bedrock" is a cost decision, not just a config
-# flip.
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
-_SUPPORTED_PROVIDERS = ("groq", "claude", "bedrock", "bedrock_openai", "fireworks", "cerebras")
+# credentials required.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "fireworks").strip().lower()
+_SUPPORTED_PROVIDERS = ("fireworks", "bedrock", "bedrock_openai", "azure")
 if LLM_PROVIDER not in _SUPPORTED_PROVIDERS:
     raise ValueError(
         f"Unsupported LLM_PROVIDER={LLM_PROVIDER!r}. Supported values: {', '.join(_SUPPORTED_PROVIDERS)}"
     )
-
-# claude-haiku-4-5 by user choice -- cheapest/fastest Claude tier, no
-# shared per-minute rate limit like Groq's free tier. Override via
-# CLAUDE_MODEL in .env (e.g. claude-sonnet-5 or claude-opus-5) if answer
-# quality on the harder calculation/judgment questions matters more than
-# cost per question for your use case.
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 
 # Bedrock model IDs for Claude on the bedrock-runtime endpoint are the full
 # dated snapshot ID, not the bare friendly name -- and in us-east-1
@@ -123,22 +116,17 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 # exact string.
 BEDROCK_MODEL = os.environ.get("BEDROCK_MODEL", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
 
-# gpt-oss-120b via Bedrock's OpenAI-compatible endpoint -- same model as
-# GROQ_MODEL above, different host. AWS's actual model ID carries a version
-# suffix ("-1:0") that the bare "openai.gpt-oss-120b" name lacks -- confirmed
-# against a live 400 "invalid model identifier" error before landing on
-# this exact string. Override via BEDROCK_OPENAI_MODEL in .env, e.g.
-# "openai.gpt-oss-20b-1:0" for the smaller/cheaper/faster tier.
+# gpt-oss-120b via Bedrock's OpenAI-compatible endpoint. AWS's actual model
+# ID carries a version suffix ("-1:0") that the bare "openai.gpt-oss-120b"
+# name lacks -- confirmed against a live 400 "invalid model identifier"
+# error before landing on this exact string. Override via
+# BEDROCK_OPENAI_MODEL in .env, e.g. "openai.gpt-oss-20b-1:0" for the
+# smaller/cheaper/faster tier.
 BEDROCK_OPENAI_MODEL = os.environ.get("BEDROCK_OPENAI_MODEL", "openai.gpt-oss-120b-1:0")
 
-# gpt-oss-120b via Fireworks AI -- same model, third host. Override via
+# gpt-oss-120b via Fireworks AI -- same model, second host. Override via
 # FIREWORKS_MODEL in .env, e.g. "accounts/fireworks/models/gpt-oss-20b".
 FIREWORKS_MODEL = os.environ.get("FIREWORKS_MODEL", "accounts/fireworks/models/gpt-oss-120b")
-
-# gpt-oss-120b via Cerebras -- same model, fourth host, wafer-scale inference
-# (fast). Override via CEREBRAS_MODEL in .env, e.g. "gpt-oss-20b" for the
-# smaller/cheaper/faster tier if Cerebras offers it.
-CEREBRAS_MODEL = os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b")
 
 # bedrock-runtime endpoints -- region-scoped, like every Bedrock endpoint.
 # Built from AWS_REGION rather than hardcoded so both track whichever region
@@ -152,11 +140,19 @@ BEDROCK_OPENAI_API_URL = (
     f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com/openai/v1/chat/completions" if AWS_REGION else ""
 )
 
+# Azure OpenAI selects the model via a deployment name you create in the
+# Azure AI Foundry / Azure OpenAI resource, not a bare model id -- that
+# deployment name goes in the URL path, and the API version is a separate,
+# explicit query param (Azure versions its REST surface independently of
+# whatever model is behind the deployment). Override AZURE_OPENAI_API_VERSION
+# in .env if your resource requires a different one.
+AZURE_OPENAI_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
 
-# Free-tier Groq keys are capped at a modest tokens-per-minute budget shared
-# across every model on the account. "low" cuts the model's internal
-# reasoning-channel output roughly in half without materially hurting
-# instruction-following on a task this constrained (quote-and-cite).
+
+# "low" cuts the model's internal reasoning-channel output roughly in half
+# without materially hurting instruction-following on a task this
+# constrained (quote-and-cite) -- keeps responses fast and requests small
+# across every provider above.
 REASONING_EFFORT = "low"
 
 # Hard cap per context passage sent to the LLM. Confirmed as a real, costly
@@ -698,8 +694,10 @@ def _render_context(top_candidates: List[Dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _parse_groq_duration(s: str) -> Optional[float]:
-    """Parse Groq's rate-limit reset strings, e.g. '12.112s', '1m26.4s', '547ms'."""
+def _parse_rate_limit_duration(s: str) -> Optional[float]:
+    """Parse an x-ratelimit-reset-* duration string shared across the
+    OpenAI-Chat-Completions-shaped backends this module talks to, e.g.
+    '12.112s', '1m26.4s', '547ms'."""
     m = re.match(r"^(?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)$", s.strip())
     if not m:
         return None
@@ -721,7 +719,7 @@ def _retry_after_seconds(exc: Exception, attempt: int) -> float:
         reset = response.headers.get("x-ratelimit-reset-tokens") or response.headers.get(
             "x-ratelimit-reset-requests"
         )
-        parsed = _parse_groq_duration(reset) if reset else None
+        parsed = _parse_rate_limit_duration(reset) if reset else None
         if parsed is not None:
             return min(parsed + 0.5, 60.0)
     return min(2 ** attempt, 30.0)
@@ -826,27 +824,33 @@ _DOCUMENT_PURPOSE_MARKERS = (
 
 
 async def _call_openai_compatible(
-    url: str, api_key: str, model: str, missing_key_msg: str, messages: List[Dict], max_retries: int = 4
+    url: str, api_key: str, model: Optional[str], missing_key_msg: str, messages: List[Dict],
+    max_retries: int = 4, auth_header: str = "Authorization", auth_prefix: str = "Bearer ",
 ):
     """Shared POST logic for every OpenAI-Chat-Completions-shaped backend
-    this module talks to (Groq, Bedrock's OpenAI-compatible route,
-    Fireworks) -- same request shape, same bearer-token auth, same
-    rate-limit-aware retry. Provider-specific wrappers below just supply
-    the URL/key/model."""
+    this module talks to (Bedrock's OpenAI-compatible route, Fireworks,
+    Azure OpenAI) -- same JSON request/response shape, same rate-limit-aware
+    retry. `auth_header`/`auth_prefix` exist because Azure authenticates
+    with a plain 'api-key' header instead of 'Authorization: Bearer' like
+    the other two; `model=None` omits the "model" field entirely, since
+    Azure selects the model via the deployment name baked into the URL, not
+    a payload field. Provider-specific wrappers below just supply what
+    differs."""
     if not api_key:
         raise RuntimeError(missing_key_msg)
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        auth_header: f"{auth_prefix}{api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model,
         "messages": messages,
         "temperature": 0.0,
         "stream": False,
         "reasoning_effort": REASONING_EFFORT,
     }
+    if model is not None:
+        payload["model"] = model
 
     last_exc = None
     for attempt in range(max_retries):
@@ -865,13 +869,6 @@ async def _call_openai_compatible(
     raise last_exc
 
 
-async def _call_groq(messages: List[Dict], max_retries: int = 4):
-    return await _call_openai_compatible(
-        GROQ_API_URL, GROQ_API_KEY, GROQ_MODEL,
-        "GROQ_API_KEY environment variable is not set", messages, max_retries,
-    )
-
-
 async def _call_fireworks(messages: List[Dict], max_retries: int = 4):
     return await _call_openai_compatible(
         FIREWORKS_API_URL, FIREWORKS_API_KEY, FIREWORKS_MODEL,
@@ -879,64 +876,10 @@ async def _call_fireworks(messages: List[Dict], max_retries: int = 4):
     )
 
 
-# Cerebras's trial-credit tier caps at 5 requests/minute -- confirmed live
-# via the x-ratelimit-* response headers, and shared across every model on
-# the account (gpt-oss-120b and gemma-4-31b both reported the same 5/min,
-# 150/hour, 2400/day budget), so switching models doesn't raise it. A single
-# question here fires 2-3 LLM calls back to back (relevance-rerank ->
-# generation, then evaluate.py's own judge call on top) with no spacing
-# between them, which blows past 5/min almost immediately and burns retries
-# against the daily cap on 429s that were entirely avoidable. This throttle
-# makes every outbound Cerebras call -- regardless of caller -- wait its
-# turn instead, so the limit is respected proactively rather than recovered
-# from after the fact.
-_CEREBRAS_MIN_INTERVAL = 13.0  # seconds; 60/5 = 12s minimum, padded for clock/network slop
-_cerebras_rate_lock = asyncio.Lock()
-_cerebras_last_call_at = [0.0]
-
-
-async def _throttle_cerebras():
-    async with _cerebras_rate_lock:
-        loop = asyncio.get_event_loop()
-        now = loop.time()
-        wait = _CEREBRAS_MIN_INTERVAL - (now - _cerebras_last_call_at[0])
-        if wait > 0:
-            await asyncio.sleep(wait)
-        _cerebras_last_call_at[0] = loop.time()
-
-
-async def _call_cerebras(messages: List[Dict], max_retries: int = 4):
-    await _throttle_cerebras()
-    return await _call_openai_compatible(
-        CEREBRAS_API_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL,
-        "CEREBRAS_API_KEY environment variable is not set", messages, max_retries,
-    )
-
-
-_ANTHROPIC_CLIENT = None
-
-
-def _get_claude_client():
-    """Lazy singleton so importing this module doesn't require the
-    'anthropic' package unless LLM_PROVIDER=claude is actually selected."""
-    global _ANTHROPIC_CLIENT
-    if _ANTHROPIC_CLIENT is not None:
-        return _ANTHROPIC_CLIENT
-    try:
-        import anthropic
-    except ImportError as exc:
-        raise RuntimeError(
-            "LLM_PROVIDER=claude requires the 'anthropic' package: pip install anthropic"
-        ) from exc
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
-    _ANTHROPIC_CLIENT = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-    return _ANTHROPIC_CLIENT
-
-
 def _split_system(messages: List[Dict]):
-    """Claude takes 'system' as its own top-level request parameter, not a
-    message with role='system' the way the Groq/OpenAI-style payload does."""
+    """Claude (used here via Bedrock's native Messages route) takes 'system'
+    as its own top-level request parameter, not a message with role='system'
+    the way an OpenAI-Chat-Completions-shaped payload does."""
     system_parts = [m["content"] for m in messages if m.get("role") == "system"]
     claude_messages = [m for m in messages if m.get("role") != "system"]
     return "\n\n".join(system_parts), claude_messages
@@ -962,26 +905,6 @@ def _claude_extra_kwargs(model: str) -> Dict:
     return {}
 
 
-async def _call_claude(messages: List[Dict], max_retries: int = 4):
-    """Call the Anthropic API and reshape the response into the same
-    {"choices": [{"message": {"content": ...}}]} shape _call_groq returns,
-    so _parse_llm_output and every caller stay provider-agnostic. The SDK
-    retries 429/5xx/connection errors internally, so no hand-rolled backoff
-    loop is needed here the way there is for the raw-httpx Groq call."""
-    client = _get_claude_client()
-    system_text, claude_messages = _split_system(messages)
-
-    response = await client.with_options(max_retries=max_retries).messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=4096,
-        system=system_text,
-        messages=claude_messages,
-        **_claude_extra_kwargs(CLAUDE_MODEL),
-    )
-    text = "".join(block.text for block in response.content if block.type == "text")
-    return {"choices": [{"message": {"content": text}}]}
-
-
 def _require_bedrock_config(provider_name: str, api_url: str):
     if not AWS_BEARER_TOKEN_BEDROCK:
         raise RuntimeError("AWS_BEARER_TOKEN_BEDROCK environment variable is not set")
@@ -997,9 +920,8 @@ async def _call_bedrock(messages: List[Dict], max_retries: int = 4):
     with a Bedrock API key (x-api-key bearer token) rather than AWS SigV4 --
     no boto3, no AWS access key pair, no IAM role. Same request/response
     shape as the first-party Anthropic API (the route mirrors it directly),
-    so this parallels _call_claude but over raw httpx instead of the SDK,
-    and reshapes the response into the same {"choices": [...]} shape
-    _call_groq returns."""
+    reshaped into the same {"choices": [...]} shape every other provider in
+    this module returns, so _parse_llm_output stays provider-agnostic."""
     _require_bedrock_config("bedrock", BEDROCK_MESSAGES_API_URL)
     system_text, claude_messages = _split_system(messages)
 
@@ -1038,7 +960,7 @@ async def _call_bedrock(messages: List[Dict], max_retries: int = 4):
 
 async def _call_bedrock_openai(messages: List[Dict], max_retries: int = 4):
     """POST to Bedrock's OpenAI-compatible chat completions endpoint -- same
-    request/response shape as Groq/Fireworks, different bearer token and a
+    request/response shape as Fireworks, different bearer token and a
     region check up front."""
     _require_bedrock_config("bedrock_openai", BEDROCK_OPENAI_API_URL)
     return await _call_openai_compatible(
@@ -1047,19 +969,46 @@ async def _call_bedrock_openai(messages: List[Dict], max_retries: int = 4):
     )
 
 
+def _require_azure_config():
+    if not AZURE_OPENAI_API_KEY:
+        raise RuntimeError("AZURE_OPENAI_API_KEY environment variable is not set")
+    if not AZURE_OPENAI_ENDPOINT or not AZURE_OPENAI_DEPLOYMENT:
+        raise RuntimeError(
+            "AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT environment variables "
+            "are both required for LLM_PROVIDER=azure"
+        )
+
+
+def _azure_url() -> str:
+    return (
+        f"{AZURE_OPENAI_ENDPOINT.rstrip('/')}/openai/deployments/{AZURE_OPENAI_DEPLOYMENT}"
+        f"/chat/completions?api-version={AZURE_OPENAI_API_VERSION}"
+    )
+
+
+async def _call_azure(messages: List[Dict], max_retries: int = 4):
+    """POST to Azure OpenAI's Chat Completions endpoint. Doesn't reuse the
+    default auth shape _call_openai_compatible assumes: Azure authenticates
+    with a plain 'api-key' header (not 'Authorization: Bearer'), and the
+    deployment name in the URL selects the model, so no "model" field
+    belongs in the payload."""
+    _require_azure_config()
+    return await _call_openai_compatible(
+        _azure_url(), AZURE_OPENAI_API_KEY, None,
+        "AZURE_OPENAI_API_KEY environment variable is not set", messages, max_retries,
+        auth_header="api-key", auth_prefix="",
+    )
+
+
 async def _call_llm(messages: List[Dict], max_retries: int = 4):
     """Dispatch to whichever backend LLM_PROVIDER selects."""
-    if LLM_PROVIDER == "claude":
-        return await _call_claude(messages, max_retries=max_retries)
     if LLM_PROVIDER == "bedrock":
         return await _call_bedrock(messages, max_retries=max_retries)
     if LLM_PROVIDER == "bedrock_openai":
         return await _call_bedrock_openai(messages, max_retries=max_retries)
-    if LLM_PROVIDER == "fireworks":
-        return await _call_fireworks(messages, max_retries=max_retries)
-    if LLM_PROVIDER == "cerebras":
-        return await _call_cerebras(messages, max_retries=max_retries)
-    return await _call_groq(messages, max_retries=max_retries)
+    if LLM_PROVIDER == "azure":
+        return await _call_azure(messages, max_retries=max_retries)
+    return await _call_fireworks(messages, max_retries=max_retries)
 
 
 async def call_llm_raw(messages: List[Dict], max_retries: int = 4) -> str:
@@ -1074,26 +1023,29 @@ async def call_llm_raw(messages: List[Dict], max_retries: int = 4) -> str:
 
 
 async def _stream_openai_compatible_deltas(
-    url: str, api_key: str, model: str, missing_key_msg: str, messages: List[Dict]
+    url: str, api_key: str, model: Optional[str], missing_key_msg: str, messages: List[Dict],
+    auth_header: str = "Authorization", auth_prefix: str = "Bearer ",
 ) -> AsyncGenerator[str, None]:
     """Shared streaming logic for every OpenAI-Chat-Completions-shaped
     backend. Raises (rather than retrying internally) on any failure --
     stream_answer's outer retry loop owns retries, since a mid-stream
-    failure needs a fresh request anyway."""
+    failure needs a fresh request anyway. See _call_openai_compatible for
+    why `auth_header`/`auth_prefix`/`model=None` exist (Azure)."""
     if not api_key:
         raise RuntimeError(missing_key_msg)
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        auth_header: f"{auth_prefix}{api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model,
         "messages": messages,
         "temperature": 0.0,
         "stream": True,
         "reasoning_effort": REASONING_EFFORT,
     }
+    if model is not None:
+        payload["model"] = model
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         async with client.stream("POST", url, headers=headers, json=payload) as resp:
@@ -1121,44 +1073,11 @@ async def _stream_openai_compatible_deltas(
                     yield delta
 
 
-def _stream_groq_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
-    return _stream_openai_compatible_deltas(
-        GROQ_API_URL, GROQ_API_KEY, GROQ_MODEL,
-        "GROQ_API_KEY environment variable is not set", messages,
-    )
-
-
 def _stream_fireworks_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
     return _stream_openai_compatible_deltas(
         FIREWORKS_API_URL, FIREWORKS_API_KEY, FIREWORKS_MODEL,
         "FIREWORKS_API_KEY environment variable is not set", messages,
     )
-
-
-async def _stream_cerebras_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
-    """Async generator (not a plain wrapper returning one, like its siblings)
-    so the rate throttle can be awaited before the request fires."""
-    await _throttle_cerebras()
-    async for delta in _stream_openai_compatible_deltas(
-        CEREBRAS_API_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL,
-        "CEREBRAS_API_KEY environment variable is not set", messages,
-    ):
-        yield delta
-
-
-async def _stream_claude_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
-    """Yield text deltas from a Claude streaming call."""
-    client = _get_claude_client()
-    system_text, claude_messages = _split_system(messages)
-    async with client.messages.stream(
-        model=CLAUDE_MODEL,
-        max_tokens=4096,
-        system=system_text,
-        messages=claude_messages,
-        **_claude_extra_kwargs(CLAUDE_MODEL),
-    ) as stream:
-        async for text in stream.text_stream:
-            yield text
 
 
 async def _stream_bedrock_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
@@ -1207,8 +1126,8 @@ async def _stream_bedrock_deltas(messages: List[Dict]) -> AsyncGenerator[str, No
 
 def _stream_bedrock_openai_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
     """Yield text deltas from Bedrock's OpenAI-compatible endpoint -- same
-    SSE shape as Groq/Fireworks, different bearer token. The region check
-    runs eagerly (not lazily inside the generator) so a missing AWS_REGION
+    SSE shape as Fireworks, different bearer token. The region check runs
+    eagerly (not lazily inside the generator) so a missing AWS_REGION
     surfaces before any request is attempted."""
     _require_bedrock_config("bedrock_openai", BEDROCK_OPENAI_API_URL)
     return _stream_openai_compatible_deltas(
@@ -1217,19 +1136,28 @@ def _stream_bedrock_openai_deltas(messages: List[Dict]) -> AsyncGenerator[str, N
     )
 
 
+def _stream_azure_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    """Yield text deltas from Azure OpenAI -- same SSE shape as Fireworks,
+    'api-key' auth instead of 'Authorization: Bearer', no "model" field
+    (the deployment name in the URL selects it). Config check runs eagerly,
+    same reasoning as the Bedrock variant above."""
+    _require_azure_config()
+    return _stream_openai_compatible_deltas(
+        _azure_url(), AZURE_OPENAI_API_KEY, None,
+        "AZURE_OPENAI_API_KEY environment variable is not set", messages,
+        auth_header="api-key", auth_prefix="",
+    )
+
+
 def _stream_llm_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
     """Dispatch to whichever backend LLM_PROVIDER selects."""
-    if LLM_PROVIDER == "claude":
-        return _stream_claude_deltas(messages)
     if LLM_PROVIDER == "bedrock_openai":
         return _stream_bedrock_openai_deltas(messages)
     if LLM_PROVIDER == "bedrock":
         return _stream_bedrock_deltas(messages)
-    if LLM_PROVIDER == "fireworks":
-        return _stream_fireworks_deltas(messages)
-    if LLM_PROVIDER == "cerebras":
-        return _stream_cerebras_deltas(messages)
-    return _stream_groq_deltas(messages)
+    if LLM_PROVIDER == "azure":
+        return _stream_azure_deltas(messages)
+    return _stream_fireworks_deltas(messages)
 
 
 _NOT_FOUND = {"found": False, "answer": None, "page_num": None, "evidence_text": None, "sources": []}

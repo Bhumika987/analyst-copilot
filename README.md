@@ -19,45 +19,46 @@ pip install -r requirements.txt
 
 **2. Set your LLM provider credentials**
 
-`backend/llm.py` can dispatch to six providers (`groq`, `claude`, `bedrock`,
-`bedrock_openai`, `fireworks`, `cerebras`) behind one `LLM_PROVIDER` env var
--- useful as a rate-limit escape hatch, but five options with no guidance is
-sprawl, not a feature. Recommendation, based on what was actually observed
-running the practice-question set this session, not a guess:
+`backend/llm.py` dispatches to one of four providers behind a single
+`LLM_PROVIDER` env var: `fireworks` (default), `bedrock`, `bedrock_openai`,
+`azure`. This list was deliberately narrowed from a wider set this project
+carried at points during development -- Groq, a direct Anthropic API
+integration, and Cerebras were all tried and dropped: Groq started hitting
+`413 Payload Too Large` once this codebase moved to page-level chunking
+(request bodies grew past the free tier's size limit), Cerebras hit rate
+limits/disconnects on roughly 10% of calls in a real eval run, and the
+direct-Anthropic integration was subsumed by `bedrock`, which serves the
+same Claude models billed through AWS instead of a separate Anthropic key.
+Kept:
 
-- **Fireworks (`LLM_PROVIDER=fireworks`) is the current default and the one
-  to use.** It ran cleanly through a full 86-question batch with zero
-  transport errors. Set `FIREWORKS_API_KEY` (and optionally `FIREWORKS_MODEL`,
+- **`fireworks`** (default) -- OpenAI's open-weight gpt-oss-120b via
+  Fireworks AI. Ran cleanly through a full 86-question batch with zero
+  transport errors. Needs `FIREWORKS_API_KEY` (optionally `FIREWORKS_MODEL`,
   defaults to `accounts/fireworks/models/gpt-oss-120b`).
-- **Groq** works, but hit `413 Payload Too Large` partway through a run once
-  this codebase moved to page-level chunking (larger context per request
-  than the free tier's request-size limit tolerates) -- usable for quick
-  manual testing on small filings, not for a full batch run.
-- **Cerebras** hit rate limits/server disconnects on roughly 10% of calls in
-  an earlier run -- avoid for anything you need a reliable score from.
-- **Claude** is implemented and should work (correct per-model-tier
-  parameter handling for `claude-haiku-4-5` vs. the adaptive-thinking
-  models), but was never exercised live this session -- no API key was
-  available to test against. Untested, not un-recommended.
-- **Bedrock / Bedrock OpenAI** are wired in but likewise untested this
-  session.
-
-To switch, set `LLM_PROVIDER` plus that provider's key as env vars or in
-`.env` -- see `backend/llm.py`'s top-of-file provider config for the exact
-variable names each one expects.
+- **`bedrock`** -- Claude models via Amazon Bedrock's native Messages route,
+  authenticated with a Bedrock API key (no boto3/AWS SigV4 needed). Needs
+  `AWS_REGION` and `AWS_BEARER_TOKEN_BEDROCK` (optionally `BEDROCK_MODEL`).
+- **`bedrock_openai`** -- the same gpt-oss-120b model as Fireworks, routed
+  through Bedrock's OpenAI-compatible endpoint instead, billed through AWS.
+  Same env vars as `bedrock` (optionally `BEDROCK_OPENAI_MODEL`).
+- **`azure`** -- an OpenAI-compatible model deployed on Azure OpenAI
+  Service. Needs `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` (e.g.
+  `https://your-resource.openai.azure.com`), and `AZURE_OPENAI_DEPLOYMENT`
+  (the deployment name you gave the model in Azure AI Foundry -- Azure
+  selects the model that way, not by a bare model id; optionally
+  `AZURE_OPENAI_API_VERSION`, defaults to `2024-10-21`).
 
 PowerShell, sticking with the default:
 ```powershell
 $env:FIREWORKS_API_KEY = "your-fireworks-api-key-here"
 ```
 
-Or Claude, if you have a key and want to try it (defaults to
-`claude-haiku-4-5`; override with `CLAUDE_MODEL`, e.g. `claude-sonnet-5`, if
-answer quality on harder calculation/judgment questions matters more than
-cost per question):
+Or Azure OpenAI:
 ```powershell
-$env:LLM_PROVIDER = "claude"
-$env:ANTHROPIC_API_KEY = "your-anthropic-api-key-here"
+$env:LLM_PROVIDER = "azure"
+$env:AZURE_OPENAI_API_KEY = "your-azure-openai-key-here"
+$env:AZURE_OPENAI_ENDPOINT = "https://your-resource.openai.azure.com"
+$env:AZURE_OPENAI_DEPLOYMENT = "your-deployment-name"
 ```
 
 **3. Run the server**
@@ -112,9 +113,9 @@ llm.py               — evaluate_retrieval_status() is a rule-based gate
                        called, a strict system prompt forbids using outside
                        knowledge and requires NOT_FOUND when the passages
                        don't contain the answer. Provider is configurable
-                       via LLM_PROVIDER: Groq (openai/gpt-oss-120b, free
-                       tier, default) or Claude (claude-haiku-4-5 by
-                       default).
+                       via LLM_PROVIDER: Fireworks (openai/gpt-oss-120b,
+                       default), AWS Bedrock (Claude or gpt-oss-120b), or
+                       Azure OpenAI.
                        Retries with exponential backoff on rate limits.
     │
     ▼

@@ -10,5 +10,4 @@ sentence-transformers
 numpy
 httpx
 pydantic
-anthropic
 asyncpg

@@ -8,10 +8,12 @@ Generic instructions for running this on any Docker-friendly host. A
 **Environment variables** (set as secrets/env vars in your host's
 dashboard -- never commit them):
 
-- `GROQ_API_KEY` -- required unless you're using a different `LLM_PROVIDER`.
-- `LLM_PROVIDER` -- optional, defaults to `groq`. Set to `claude` (needs
-  `ANTHROPIC_API_KEY`, defaults to `claude-haiku-4-5`) or one of the other
-  providers wired into `backend/llm.py` if you're using those instead.
+- `LLM_PROVIDER` -- optional, defaults to `fireworks`. One of `fireworks`,
+  `bedrock`, `bedrock_openai`, `azure` -- see `backend/llm.py`'s top-of-file
+  provider config for exactly which env vars each one needs
+  (`FIREWORKS_API_KEY`; `AWS_REGION` + `AWS_BEARER_TOKEN_BEDROCK` for either
+  Bedrock variant; `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` +
+  `AZURE_OPENAI_DEPLOYMENT` for Azure).
 - `EMBEDDING_MODEL` -- optional, defaults to `normal` (BGE-small, baked
   into the image at build time -- see the Dockerfile).
 - `DATABASE_URL` -- optional, a Postgres connection string. See
@@ -76,7 +78,7 @@ point your host's health check at this path.
 ```bash
 docker build -t analyst-copilot .
 docker run -p 8000:8000 \
-  -e GROQ_API_KEY=your-key-here \
+  -e FIREWORKS_API_KEY=your-key-here \
   -v analyst-copilot-data:/app/data \
   analyst-copilot
 ```
@@ -127,7 +129,7 @@ steps above apply to any of them:
 - **Fly.io**: `fly launch` in the repo root detects the Dockerfile and
   scaffolds a `fly.toml`. Add a volume with
   `fly volumes create data --size 1` and mount it at `/app/data` in
-  `fly.toml`. Set secrets with `fly secrets set GROQ_API_KEY=...`.
+  `fly.toml`. Set secrets with `fly secrets set FIREWORKS_API_KEY=...`.
 - **Railway**: New Project -> Deploy from GitHub repo -> it detects the
   Dockerfile automatically. Add a Volume from the service's Settings,
   mount path `/app/data`. Set env vars under Variables.
