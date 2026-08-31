@@ -31,12 +31,6 @@ abstains when the top retrieved evidence doesn't actually satisfy the
 question. This is the single biggest lever on the score, since every wrong
 answer costs twice what a right one earns.
 
-A diagnostic rerun of the 86 practice questions that were failing before a
-batch of targeted fixes (below) moved the aggregate score on that subset
-from **−16 to −11**, with 5 questions flipping to fully correct. That's a
-deliberately hardest-case slice, not the full 136-question set — a clean
-full run is still pending as the honest overall number.
-
 ## What we kept
 
 Page-aware chunking with atomic tables (a split table row is a guaranteed
