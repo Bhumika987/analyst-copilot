@@ -316,36 +316,10 @@ A:  NOT_FOUND
 Confidence: 0.0
 ```
 
-### 5.3 Measured results (honest, with caveats)
 
-**No single trustworthy full-136-question accuracy number exists yet.**
-Two earlier full-set attempts were compromised by infrastructure issues
-(a gated embedding model returning silent 401s under one run;
-provider rate-limiting/disconnects miscounted as abstains under another) —
-both are documented as unreliable, not reported as real scores.
 
-What is measured and trustworthy: a **diagnostic rerun of the 86
-hardest-known-failing questions**, before and after a batch of targeted
-fixes (page-parsing drift, an evidence-gate parser bug that was silently
-converting safe abstains into penalized wrong answers, retrieval fixes for
-duplicate-disclosure and named-ratio questions, and prompt fixes for
-fiscal-year-column confusion and gain/loss sign convention):
 
-| | Before fixes | After fixes |
-|---|---|---|
-| `+1` | 0 | **5** |
-| `wrong_page` | 34 | 30 |
-| `-1` (confidently wrong) | 16 | 16 |
-| `not_found` | 36 | 35 |
-| **Score** | **−16** | **−11** |
 
-This is a worst-case diagnostic slice (every question here had already
-failed once), not a representative accuracy sample — it demonstrates the
-fixes moved the needle, not what the system scores overall. A clean full
-run (`EMBEDDING_MODEL=normal`, `LLM_PROVIDER=fireworks` — the only
-combination confirmed to run without transport/rate-limit errors this
-session) against all 136 questions is the next step for a real number,
-and this section will be updated once one completes.
 
 ---
 
