@@ -24,8 +24,19 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
-WINDOW_WORDS = 350
-OVERLAP_WORDS = 80
+# Page-level chunking: a flushed text block (bounded by page/section/
+# subsection/table boundaries -- see parse_filing_to_window_chunks) becomes
+# ONE chunk instead of being sliced into small overlapping windows. This
+# mirrors the FinanceBench_RAG approach of indexing at page granularity
+# rather than fragmenting a single page's prose across multiple retrieval
+# units, which risks splitting one answer's evidence across chunk
+# boundaries. PAGE_CHUNK_WORD_CAP is only a safety ceiling for the rare
+# unusually long unbroken run (e.g. a multi-page Risk Factors section with
+# no subsection headings); real single-page/subsection segments are almost
+# always well under it. OVERLAP_WORDS only matters for that rare over-cap
+# split fallback.
+PAGE_CHUNK_WORD_CAP = 1200
+OVERLAP_WORDS = 100
 LOOKBACK_ELEMENTS = 20
 PAGE_NUM_RE = re.compile(r"^\s*(\d{1,3})\s*$")
 
@@ -44,6 +55,11 @@ def normalize_text(text: str) -> str:
         text = text.replace(src, dst)
     text = unicodedata.normalize("NFKC", text)
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\bShee\s+t\b", "Sheet", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bFlow\s+s\b", "Flows", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bStatement\s+s\b", "Statements", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bOperation\s+s\b", "Operations", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bActivit\s+y\b", "Activity", text, flags=re.IGNORECASE)
     text = re.sub(r"\n\s*\n+", "\n", text)
     text = re.sub(r" *\n *", "\n", text)
     return text.strip()
@@ -57,17 +73,33 @@ def _extract_sec_header_value(text: str, label: str) -> Optional[str]:
     return match.group(1).strip()
 
 
+F_PAGE_NUM_RE = re.compile(r"^\s*F-\s?(\d{1,3})\s*$", re.IGNORECASE)
+
+
 def _find_page_number(elements: List, hr_index: int) -> Optional[int]:
-    """Look backwards from the <hr/> for a standalone digit run = page number."""
+    """Look backwards from the <hr/> for a standalone digit run = page number.
+
+    Many 10-Ks restart pagination inside the financial statements section
+    with "F-1", "F-2", ... labels instead of plain digits. Those don't match
+    PAGE_NUM_RE and are deliberately NOT treated as a plain-digit page here
+    (returning a bare int for "F-3" would silently mean page 3, which is
+    wrong). Returning None for them is intentional: the caller advances the
+    running page count by one physical page instead, rather than freezing on
+    the last plain-digit page it saw -- which previously collapsed the
+    entire financial statements section (balance sheet, income statement,
+    cash flow statement, every footnote) onto a single wrong page number.
+    """
     start = max(0, hr_index - LOOKBACK_ELEMENTS)
     for el in reversed(elements[start:hr_index]):
         try:
             text = el.get_text() if hasattr(el, "get_text") else str(el)
         except Exception:
             continue
-        text = text.strip()
+        text = normalize_text(text).strip()
         if not text:
             continue
+        if F_PAGE_NUM_RE.match(text):
+            return None
         m = PAGE_NUM_RE.match(text)
         if m:
             num = int(m.group(1))
@@ -92,6 +124,35 @@ def _table_to_pipe_text(table) -> str:
     return "\n".join(rows_out)
 
 
+def _embedded_table_caption(table_text: str) -> Optional[str]:
+    """Some tables (notably SEC cover-page tables, e.g. the Section 12(b)
+    securities-registration table) carry their real caption as the FIRST
+    ROW of the table itself, not as a separate preceding heading element
+    the way most tables do. _extract_table_context's heading-lookback
+    heuristic has nothing to find there and falls back to whichever nearby
+    (unrelated) heading happens to be closest -- confirmed against a real
+    miss: the Section 12(b) securities table, the exact evidence a "which
+    debt securities are registered" question needs, was mislabeled
+    "(Former Name or Former Address, if Changed Since Last Report)", a
+    neighboring cover-page field label, which meant the reranker's
+    title-matching boost never recognized this table as relevant to a
+    securities question at all.
+
+    Detects a single-cell first row ending in ":" -- a caption, not
+    tabular data (a genuine data row would render with "|" separators from
+    _table_to_pipe_text, since it has multiple cells) -- and returns it for
+    use as the title instead. Narrow and conservative by design: only
+    overrides when the table's own text unambiguously supplies a better
+    title than the heading-lookback found.
+    """
+    first_line = (table_text or "").split("\n", 1)[0].strip()
+    if not first_line or "|" in first_line or not first_line.endswith(":"):
+        return None
+    if len(first_line) > 120:
+        return None
+    return first_line.rstrip(":").strip()
+
+
 ITEM_RE = re.compile(
     r"^\s*(?:PART\s+[IVX]+\s*[-–—]?\s*)?ITEM\s+([0-9]{1,2}[A-Z]?)\s*[\.\:\-\–\—]?\s*(.*)$",
     re.IGNORECASE
@@ -105,27 +166,203 @@ SUBSECTION_KEYWORDS = (
 )
 
 
+JUNK_HEADING_RE = re.compile(r"^[\W_]+$")
+PERIOD_TITLE_RE = re.compile(
+    r"\b(at|as of|as at|for the|years? ended|quarters? ended|three months ended|"
+    r"six months ended|nine months ended|twelve months ended)\b",
+    re.IGNORECASE,
+)
+STATEMENT_HEADING_RE = re.compile(
+    r"\b("
+    r"consolidated\s+(?:balance sheets?|statements? of (?:operations|income|earnings|"
+    r"comprehensive income|cash flows?|financial position|stockholders'? equity|"
+    r"shareholders'? equity|changes in equity))|"
+    r"balance sheets?|statements? of (?:operations|income|earnings|cash flows?|"
+    r"financial position|stockholders'? equity|shareholders'? equity|changes in equity)|"
+    r"income statements?|cash flow statements?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _heading_text(el) -> str:
+    try:
+        text = el.get_text(" ", strip=True) if hasattr(el, "get_text") else str(el).strip()
+    except Exception:
+        return ""
+    return normalize_text(text)
+
+
+def _is_junk_heading(text: str) -> bool:
+    cleaned = normalize_text(text)
+    lower = cleaned.lower().strip()
+    if not lower:
+        return True
+    if lower in {"table of contents", "contents", "index", "[table]"}:
+        return True
+    if PAGE_NUM_RE.match(lower) or re.fullmatch(r"[\d.,$()% -]+", lower):
+        return True
+    if JUNK_HEADING_RE.match(lower):
+        return True
+    if len(lower) > 180:
+        return True
+    return False
+
+
+def _dedupe_preserve_order(values: List[str]) -> List[str]:
+    seen = set()
+    result = []
+    for value in values:
+        key = re.sub(r"\s+", " ", value.lower()).strip()
+        if key and key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
+def _extract_table_context(elements: List, table_idx: int) -> Dict[str, Optional[str]]:
+    """Collect local heading stack without losing the primary statement title."""
+    start = max(0, table_idx - 24)
+    candidates = []
+    for el in elements[start:table_idx]:
+        if getattr(el, "name", None) in {"script", "style", "table", "tr", "td", "th"}:
+            continue
+        text = _heading_text(el)
+        if _is_junk_heading(text):
+            continue
+        candidates.append(text)
+
+    candidates = _dedupe_preserve_order(candidates)
+    statement_title = None
+    table_title = None
+
+    for text in reversed(candidates):
+        if STATEMENT_HEADING_RE.search(text):
+            statement_title = text
+            break
+
+    for text in reversed(candidates):
+        if text == statement_title:
+            continue
+        if PERIOD_TITLE_RE.search(text):
+            table_title = text
+            break
+
+    if table_title is None:
+        for text in reversed(candidates):
+            if text != statement_title:
+                table_title = text
+                break
+
+    table_context = " | ".join(candidates[-4:]) if candidates else None
+    return {
+        "statement_title": statement_title,
+        "table_title": table_title,
+        "table_context": table_context,
+    }
+
+
 def _extract_table_title(elements: List, table_idx: int) -> Optional[str]:
-    """Scan preceding elements for table title or caption."""
-    start = max(0, table_idx - 10)
-    for el in reversed(elements[start:table_idx]):
-        try:
-            text = el.get_text(" ", strip=True) if hasattr(el, "get_text") else str(el).strip()
-        except Exception:
-            continue
-        text = normalize_text(text)
-        if not text or len(text) > 120 or text == "[TABLE]":
-            continue
-        if any(kw in text.lower() for kw in ("statement", "table", "schedule", "note", "consolidated", "balance sheet", "income", "cash flow")):
-            return text
-        if len(text) < 80 and not text.endswith("."):
-            return text
-    return None
+    """Backward-compatible wrapper for callers that only need table_title."""
+    return _extract_table_context(elements, table_idx).get("table_title")
 
 
-def _detect_statement_type(section: str = "", subsection: str = "", table_title: Optional[str] = "", text: str = "") -> str:
+def _statement_structure_scores(
+    section: str = "",
+    subsection: str = "",
+    statement_title: Optional[str] = "",
+    table_title: Optional[str] = "",
+    table_context: Optional[str] = "",
+    text: str = "",
+) -> Dict[str, int]:
+    """Weighted, deterministic evidence for primary financial statement type."""
+    header_text = f"{section} {subsection} {statement_title or ''} {table_title or ''} {table_context or ''}".lower()
+    body_text = (text or "").lower()
+
+    scores = {
+        "BALANCE_SHEET": 0,
+        "INCOME_STATEMENT": 0,
+        "CASH_FLOW_STATEMENT": 0,
+        "EQUITY_STATEMENT": 0,
+    }
+
+    header_indicators = {
+        "BALANCE_SHEET": ("balance sheet", "financial position"),
+        "INCOME_STATEMENT": ("statement of income", "statements of income", "statement of operations", "statements of operations", "statement of earnings"),
+        "CASH_FLOW_STATEMENT": ("statement of cash flow", "statements of cash flow", "cash flows"),
+        "EQUITY_STATEMENT": ("statement of equity", "statements of equity", "changes in equity", "stockholders' equity", "shareholders' equity"),
+    }
+    for stmt, indicators in header_indicators.items():
+        if any(ind in header_text for ind in indicators):
+            scores[stmt] += 8
+
+    body_indicators = {
+        "BALANCE_SHEET": (
+            "assets", "current assets", "total assets", "liabilities",
+            "current liabilities", "total liabilities", "total equity",
+            "property, plant and equipment",
+        ),
+        "INCOME_STATEMENT": (
+            "revenue", "net sales", "sales", "cost of sales", "gross profit",
+            "operating income", "income before", "net income", "net earnings",
+            "earnings per share", "eps",
+        ),
+        "CASH_FLOW_STATEMENT": (
+            "operating activities", "investing activities", "financing activities",
+            "net cash provided", "net cash used", "cash flows from operating",
+            "cash flows from investing", "cash flows from financing",
+        ),
+        "EQUITY_STATEMENT": (
+            "retained earnings", "treasury stock", "common stock",
+            "additional paid-in capital", "accumulated other comprehensive",
+            "stockholders' equity", "shareholders' equity",
+        ),
+    }
+    for stmt, indicators in body_indicators.items():
+        for indicator in indicators:
+            if indicator in body_text:
+                scores[stmt] += 2 if len(indicator.split()) > 1 else 1
+
+    if "total assets" in body_text and ("total liabilities" in body_text or "current liabilities" in body_text):
+        scores["BALANCE_SHEET"] += 8
+    if "operating activities" in body_text and "investing activities" in body_text:
+        scores["CASH_FLOW_STATEMENT"] += 8
+    if ("net income" in body_text or "net earnings" in body_text) and ("earnings per share" in body_text or "cost of sales" in body_text):
+        scores["INCOME_STATEMENT"] += 6
+    if ("retained earnings" in body_text or "treasury stock" in body_text) and ("common stock" in body_text or "additional paid-in capital" in body_text):
+        scores["EQUITY_STATEMENT"] += 6
+
+    note_context = subsection.lower().startswith("note") or "notes to consolidated" in header_text
+    if note_context and not (statement_title and STATEMENT_HEADING_RE.search(statement_title)):
+        for stmt in scores:
+            scores[stmt] = max(0, scores[stmt] - 4)
+
+    return scores
+
+
+def _detect_statement_type(
+    section: str = "",
+    subsection: str = "",
+    table_title: Optional[str] = "",
+    text: str = "",
+    statement_title: Optional[str] = "",
+    table_context: Optional[str] = "",
+    is_table: bool = False,
+) -> str:
     """Classify generic SEC financial document section type."""
-    combined = f"{section} {subsection} {table_title or ''} {text[:250]}".lower()
+    text_window = text[:1200] if is_table else text[:250]
+    combined = f"{section} {subsection} {statement_title or ''} {table_title or ''} {table_context or ''} {text_window}".lower()
+    scores = _statement_structure_scores(
+        section=section,
+        subsection=subsection,
+        statement_title=statement_title,
+        table_title=table_title,
+        table_context=table_context,
+        text=text,
+    )
+    best_type, best_score = max(scores.items(), key=lambda item: item[1])
+    if (is_table or statement_title or table_context) and best_score >= 8:
+        return best_type
 
     if any(k in combined for k in ("cash flows from investing", "cash flows from operating", "statements of cash flows", "statement of cash flows", "cash flows activities")):
         return "CASH_FLOW_STATEMENT"
@@ -137,6 +374,8 @@ def _detect_statement_type(section: str = "", subsection: str = "", table_title:
         return "EQUITY_STATEMENT"
     if any(k in combined for k in ("item 1a", "risk factors")):
         return "RISK_FACTORS"
+    if any(k in combined for k in ("item 1 - financial statements", "item 1. financial statements")):
+        return "OTHER"
     if any(k in combined for k in ("item 1", "business description", "business overview")):
         return "BUSINESS"
     if any(k in combined for k in ("item 7", "management's discussion")):
@@ -161,15 +400,32 @@ def _extract_units(text: str = "", table_title: Optional[str] = "") -> Optional[
     return None
 
 
+def _metadata_diagnostic(statement_type: str, structural_scores: Dict[str, int]) -> Optional[Dict]:
+    """Flag table metadata that looks structurally stronger than its label."""
+    predicted_type, predicted_score = max(structural_scores.items(), key=lambda item: item[1])
+    current_score = structural_scores.get(statement_type, 0)
+    if predicted_score < 10:
+        return None
+    if statement_type in {"OTHER", "BUSINESS", "FOOTNOTES"} or predicted_score >= current_score + 8:
+        return {
+            "predicted_statement_type": predicted_type,
+            "predicted_score": predicted_score,
+            "assigned_statement_type": statement_type,
+            "assigned_score": current_score,
+            "structural_scores": structural_scores,
+        }
+    return None
+
+
 def _windowize(text: str, page_num: Optional[int], section: str = "General", subsection: str = "", chunk_index_counter: Optional[List[int]] = None) -> List[Dict]:
-    """Split long text into overlapping word-count windows while preserving section metadata."""
+    """Emit a flushed text block as a single page-scoped chunk (see module-level note on PAGE_CHUNK_WORD_CAP)."""
     if chunk_index_counter is None:
         chunk_index_counter = [0]
 
     st_type = _detect_statement_type(section=section, subsection=subsection, text=text)
 
     words = text.split()
-    if len(words) <= WINDOW_WORDS:
+    if len(words) <= PAGE_CHUNK_WORD_CAP:
         idx = chunk_index_counter[0]
         chunk_index_counter[0] += 1
         return [{
@@ -185,9 +441,9 @@ def _windowize(text: str, page_num: Optional[int], section: str = "General", sub
         }]
 
     chunks = []
-    step = WINDOW_WORDS - OVERLAP_WORDS
+    step = PAGE_CHUNK_WORD_CAP - OVERLAP_WORDS
     for start in range(0, len(words), step):
-        window_words = words[start:start + WINDOW_WORDS]
+        window_words = words[start:start + PAGE_CHUNK_WORD_CAP]
         if not window_words:
             continue
         idx = chunk_index_counter[0]
@@ -203,7 +459,7 @@ def _windowize(text: str, page_num: Optional[int], section: str = "General", sub
             "chunk_index": idx,
             "text": " ".join(window_words),
         })
-        if start + WINDOW_WORDS >= len(words):
+        if start + PAGE_CHUNK_WORD_CAP >= len(words):
             break
     return chunks
 
@@ -256,9 +512,32 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
 
         if el.name == "hr":
             pnum = page_after_hr.get(i)
-            if pnum is not None:
-                flush_text_buffer(current_page, current_section, current_subsection)
-                current_page = pnum + 1
+            flush_text_buffer(current_page, current_section, current_subsection)
+            # A real page-number label always advances forward and rarely by
+            # more than a page or two -- a match that jumps backwards or
+            # wildly forward (e.g. 20+ pages) is almost always a stray digit
+            # in nearby table/paragraph content, not an actual page label
+            # (this is how page_num previously jumped to nonsense values like
+            # 619/759 deep in a filing's notes). Reject those as if no label
+            # were found at all.
+            if pnum is not None and -1 <= (pnum - current_page) <= 20:
+                # The printed page-number label found just before this <hr/>
+                # belongs to the page that STARTS right after the break, not
+                # the one that just ended (SEC .htm filings render each
+                # page's number as a running head directly above the rule
+                # that opens it, followed by nav chrome like "Table of
+                # Contents" and then the page's real content). Verified by
+                # cross-referencing gold-labeled practice questions against
+                # the raw HTML: content immediately after the "59" label was
+                # gold-annotated as page 59, not 60. Do not add +1 here.
+                current_page = pnum
+            else:
+                # No plausible label for this break (e.g. an "F-N" financial
+                # statements label, or nothing at all) -- the <hr/> still
+                # marks one physical page turn, so advance by one instead of
+                # freezing and silently collapsing every subsequent page onto
+                # the last successfully-read page number.
+                current_page = current_page + 1
             processed_ids.add(id(el))
             continue
 
@@ -266,15 +545,41 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
             flush_text_buffer(current_page, current_section, current_subsection)
             table_text = _table_to_pipe_text(el)
             if table_text.strip():
-                tbl_title = _extract_table_title(all_elements, i)
-                st_type = _detect_statement_type(section=current_section, subsection=current_subsection, table_title=tbl_title, text=table_text)
+                table_ctx = _extract_table_context(all_elements, i)
+                statement_title = table_ctx.get("statement_title")
+                tbl_title = table_ctx.get("table_title")
+                table_context = table_ctx.get("table_context")
+                embedded_caption = _embedded_table_caption(table_text)
+                if embedded_caption:
+                    tbl_title = embedded_caption
+                st_type = _detect_statement_type(
+                    section=current_section,
+                    subsection=current_subsection,
+                    table_title=tbl_title,
+                    text=table_text,
+                    statement_title=statement_title,
+                    table_context=table_context,
+                    is_table=True,
+                )
+                structural_scores = _statement_structure_scores(
+                    section=current_section,
+                    subsection=current_subsection,
+                    statement_title=statement_title,
+                    table_title=tbl_title,
+                    table_context=table_context,
+                    text=table_text,
+                )
                 meta_hdrs = []
                 if current_section and current_section != "General":
                     meta_hdrs.append(f"Section: {current_section}")
                 if current_subsection:
                     meta_hdrs.append(f"Subsection: {current_subsection}")
+                if statement_title:
+                    meta_hdrs.append(f"Statement: {statement_title}")
                 if tbl_title:
                     meta_hdrs.append(f"Table: {tbl_title}")
+                if table_context:
+                    meta_hdrs.append(f"Context: {table_context}")
                 meta_hdrs.append(f"Page: {current_page}")
                 units = _extract_units(text=table_text, table_title=tbl_title)
                 if units:
@@ -289,8 +594,12 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
                     "page_num": current_page,
                     "section": current_section,
                     "subsection": current_subsection,
+                    "statement_title": statement_title,
                     "table_title": tbl_title,
+                    "table_context": table_context,
                     "statement_type": st_type,
+                    "statement_type_scores": structural_scores,
+                    "metadata_diagnostic": _metadata_diagnostic(st_type, structural_scores),
                     "chunk_type": "table",
                     "units": units,
                     "chunk_index": idx,

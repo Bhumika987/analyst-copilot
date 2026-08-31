@@ -1,10 +1,10 @@
 ﻿"""
-Per-filing hybrid retrieval: BM25 (primary) + FAISS dense (secondary, weak
-TF-IDF-hash embeddings), fused with Reciprocal Rank Fusion.
+Per-filing hybrid retrieval: BM25 (primary) + selected FAISS dense embeddings,
+fused with Reciprocal Rank Fusion.
 
 BM25 is the signal that actually knows financial vocabulary ("capital
-expenditure", "$1,577") token-for-token; the dense vectors here are cheap
-hash embeddings meant only to catch paraphrases BM25 misses, so RRF fusion
+expenditure", "$1,577") token-for-token; the dense vectors catch paraphrases
+BM25 misses, so RRF fusion
 (rather than a weighted score blend) keeps BM25's ranking dominant without
 needing to calibrate two incompatible score scales against each other.
 """
@@ -12,6 +12,7 @@ needing to calibrate two incompatible score scales against each other.
 from __future__ import annotations
 
 import json
+import math
 import os
 import pickle
 import re
@@ -31,7 +32,7 @@ INDEX_DIR = Path(__file__).resolve().parent.parent / "data" / "indexes"
 
 _TOKEN_RE = re.compile(r"[a-z0-9$.,%]+")
 
-_INDEX_CACHE: Dict[str, "FilingIndex"] = {}
+_INDEX_CACHE: Dict[Tuple[str, str], "FilingIndex"] = {}
 DOC_ROUTING_THRESHOLD = 3.0
 
 # SEC filings use specific line-item wording ("Purchases of property, plant
@@ -151,7 +152,9 @@ def _candidate_metadata_text(c: Dict) -> str:
     parts = [
         c.get("section") or "",
         c.get("subsection") or "",
+        c.get("statement_title") or "",
         c.get("table_title") or "",
+        c.get("table_context") or "",
         c.get("statement_type") or "",
         c.get("chunk_type") or "",
         c.get("units") or "",
@@ -166,7 +169,9 @@ def _chunk_search_text(c: Dict) -> str:
     return " ".join([
         c.get("section") or "",
         c.get("subsection") or "",
+        c.get("statement_title") or "",
         c.get("table_title") or "",
+        c.get("table_context") or "",
         c.get("statement_type") or "",
         c.get("chunk_type") or "",
         c.get("units") or "",
@@ -313,7 +318,6 @@ def _rrf_fuse(weighted_ranked_lists: List[tuple], k: int = 60) -> Dict[int, floa
 
 
 from config import (
-    BGE_MODEL_NAME,
     BM25_TOP_K,
     SEMANTIC_TOP_K,
     RRF_K,
@@ -324,15 +328,16 @@ from config import (
     CONCEPT_MATCH_BOOST,
     YEAR_MATCH_BOOST,
     DUAL_AGREEMENT_BOOST,
-    MIN_CONTENT_EVIDENCE_SCORE,
     NEIGHBOR_EXPANSION_ENABLED,
     NEIGHBOR_WINDOW_SIZE,
     ENABLE_CROSS_ENCODER_RERANKER,
     CROSS_ENCODER_MODEL_NAME,
     CROSS_ENCODER_CANDIDATE_K,
     CROSS_ENCODER_LOCAL_ONLY,
+    CROSS_ENCODER_BLEND_WEIGHT,
+    get_embedding_model_name,
 )
-from embedding_service import EmbeddingService, get_embedding_service
+from embedding_service import get_embedding_service
 from vector_store import FAISSVectorStore
 from query_analyzer import QueryAnalysis, analyze_query, expand_query, UNRELATED_TOPIC_KEYWORDS
 
@@ -368,8 +373,10 @@ def _cross_encoder_text(c: Dict) -> str:
         part for part in [
             f"Section: {c.get('section')}" if c.get("section") else "",
             f"Subsection: {c.get('subsection')}" if c.get("subsection") else "",
+            f"Statement Title: {c.get('statement_title')}" if c.get("statement_title") else "",
             f"Statement: {c.get('statement_type')}" if c.get("statement_type") else "",
             f"Table: {c.get('table_title')}" if c.get("table_title") else "",
+            f"Table Context: {c.get('table_context')}" if c.get("table_context") else "",
             f"Unit: {c.get('units')}" if c.get("units") else "",
             c.get("text") or "",
         ] if part
@@ -378,8 +385,18 @@ def _cross_encoder_text(c: Dict) -> str:
 
 def cross_encoder_rerank(query: str, candidates: List[Dict]) -> List[Dict]:
     """
-    Optional semantic relevance reranker over the candidate evidence set.
+    Optional semantic relevance refinement over the candidate evidence set.
     Falls back gracefully when the model is unavailable.
+
+    The cross-encoder is a generic passage-relevance model with no notion of
+    "this is the actual audited financial statement" vs. "this is a
+    narrative table that happens to share vocabulary with the query" -- that
+    distinction is exactly what deterministic_rerank's concept/statement-type
+    scoring exists to make. So the cross-encoder's score REFINES the
+    deterministic ranking (added on top, after squashing its unbounded logit
+    into a bounded contribution via sigmoid) rather than replacing it as the
+    sole sort key -- otherwise a lay-phrased MD&A mention can outrank the
+    correct financial-statement table purely on generic semantic similarity.
     """
     if not candidates:
         return []
@@ -403,13 +420,13 @@ def cross_encoder_rerank(query: str, candidates: List[Dict]) -> List[Dict]:
     scored = []
     for c, score in zip(rerank_pool, scores):
         c_copy = dict(c)
-        c_copy["cross_encoder_score"] = float(score)
-        # Cross-encoder scores are model logits, so keep the original
-        # structural score for observability and expose a separate final rank.
-        c_copy["final_rerank_score"] = float(score)
+        ce_score = float(score)
+        ce_sigmoid = 1.0 / (1.0 + math.exp(-ce_score))
+        c_copy["cross_encoder_score"] = ce_score
+        c_copy["final_rerank_score"] = c_copy.get("rerank_score", 0.0) + ce_sigmoid * CROSS_ENCODER_BLEND_WEIGHT
         scored.append(c_copy)
 
-    scored.sort(key=lambda c: c.get("final_rerank_score", c.get("rerank_score", 0.0)), reverse=True)
+    scored.sort(key=lambda c: c["final_rerank_score"], reverse=True)
     return scored + tail
 
 
@@ -479,6 +496,25 @@ def deterministic_rerank(query: str, candidates: List[Dict], query_info: Optiona
         # 5. Dual-Retriever Agreement Bonus (+20.0)
         if c.get("bm25_rank") is not None and c.get("semantic_rank") is not None:
             agreement_boost = DUAL_AGREEMENT_BOOST
+            content_evidence_score += agreement_boost
+        elif c.get("chunk_type") == "table" and c.get("bm25_rank") is not None and c.get("bm25_rank") <= 10:
+            # Dense numeric tables ("Consumer | (0.9) | ...") systematically
+            # embed as semantically dissimilar from a natural-language
+            # question, even when they ARE the exact right evidence --
+            # confirmed against a real miss where a segment-breakdown table
+            # ranked #9 in BM25 (clearly lexically relevant, and the actual
+            # answer-bearing chunk) never entered FAISS's top 50 at all,
+            # purely because it's mostly numbers with almost no narrative
+            # English to embed -- not because it's actually unrelated to
+            # the question. That meant it lost the full +20 agreement bonus
+            # a narrative chunk with identical BM25/table/query-term scores
+            # got, on a signal (semantic similarity) that structurally
+            # can't represent this kind of evidence well in the first
+            # place. Partial (not full) compensation, and only for chunks
+            # BM25 already independently ranks as strong -- this corrects a
+            # specific, identified blind spot in one of the two aggregated
+            # retrieval signals, not a general table preference.
+            agreement_boost = DUAL_AGREEMENT_BOOST * 0.75
             content_evidence_score += agreement_boost
 
         # 6. Explicit vs Inferred Statement Supporting Boosts
@@ -556,6 +592,53 @@ def deterministic_rerank(query: str, candidates: List[Dict], query_info: Optiona
     return reranked
 
 
+def _ensure_statement_coverage(
+    top_chunks: List[Dict],
+    ranked_pool: List[Dict],
+    query_info: Optional[QueryAnalysis],
+    top_k: int,
+) -> List[Dict]:
+    """
+    Guarantee every statement type a calculation question needs is present in
+    the final slice, not just the single best-matching one.
+
+    A ratio question spanning two statements (e.g. fixed-asset-turnover =
+    revenue / average PP&E, needing both the income statement and the
+    balance sheet) tends to have one side dominate BM25/rerank scoring --
+    "revenue" terms are common and match many chunks, so every slot in a
+    small top-k can fill with income-statement chunks while the balance-sheet
+    PP&E evidence ranks just outside the window. evaluate_retrieval_status()
+    then reports that evidence as "missing" even though it exists lower in
+    ranked_pool, and the system abstains on a question it could answer.
+    Backfill the highest-ranked candidate of each still-missing required
+    statement type from the full reranked pool (not just the top_k slice)
+    rather than expanding raw retrieval depth, which doesn't help when
+    ranking itself is what's burying the evidence.
+    """
+    if not query_info or not getattr(query_info, "requires_calculation", False):
+        return top_chunks
+
+    required = list(dict.fromkeys(getattr(query_info, "target_statement_types", []) or []))
+    if len(required) < 2:
+        return top_chunks
+
+    covered = {c.get("statement_type") for c in top_chunks}
+    missing = [st for st in required if st not in covered]
+    if not missing:
+        return top_chunks
+
+    result = list(top_chunks)
+    for st in missing:
+        candidate = next((c for c in ranked_pool if c.get("statement_type") == st), None)
+        if candidate is None or any(c.get("chunk_idx") == candidate.get("chunk_idx") for c in result):
+            continue
+        if len(result) >= top_k:
+            result[-1] = candidate
+        else:
+            result.append(candidate)
+    return result
+
+
 def expand_chunk_context(chunks: List[Dict], index: "FilingIndex", window: int = NEIGHBOR_WINDOW_SIZE) -> List[Dict]:
     """
     Expand top retrieved chunks with neighboring adjacent chunks (N-1, N, N+1)
@@ -615,7 +698,7 @@ class FilingIndex:
         self.bm25 = BM25Okapi(tokenized) if tokenized else None
 
     def build_bge_faiss(self):
-        """Generate HuggingFace BGE embeddings for chunks and build FAISS vector store."""
+        """Generate selected-model embeddings for chunks and build FAISS vector store."""
         if not self.chunks:
             return
         try:
@@ -623,12 +706,22 @@ class FilingIndex:
             embed_svc = get_embedding_service()
             embeddings = embed_svc.embed_documents(texts)
             if embeddings is not None:
-                store = FAISSVectorStore(dim=embeddings.shape[1])
+                store = FAISSVectorStore(
+                    dim=embeddings.shape[1],
+                    embedding_model=embed_svc.key,
+                    model_name=embed_svc.model_name,
+                    similarity_metric=embed_svc.similarity_metric,
+                    filing_id=self.doc_name,
+                )
                 store.build_index(self.chunks, embeddings)
                 self.vector_store = store
                 self.set_vectors(embeddings)
+            else:
+                raise RuntimeError(f"No embeddings returned for EMBEDDING_MODEL={embed_svc.key}")
+        except RuntimeError:
+            raise
         except Exception as exc:
-            print(f"Warning: Failed to build BGE FAISS vector store: {exc}")
+            print(f"Warning: Failed to build selected embedding FAISS vector store: {exc}")
 
     def set_vectors(self, vectors: np.ndarray):
         """vectors: (n_chunks, dim) float32, normalized for cosine sim."""
@@ -713,7 +806,7 @@ class FilingIndex:
                 return []
             return self.vector_store.search(qv, top_k=top_k)
         except Exception as exc:
-            print(f"Warning: BGE FAISS query search failed: {exc}")
+            print(f"Warning: selected embedding FAISS query search failed: {exc}")
             return []
 
     def search_dense(self, query_vector: Optional[np.ndarray], top_k: int = SEMANTIC_TOP_K) -> List[int]:
@@ -741,6 +834,9 @@ class FilingIndex:
         if self.faiss_index is not None:
             return int(self.faiss_index.ntotal)
         return 0
+
+    def vector_index_dir(self) -> Path:
+        return INDEX_DIR / self.doc_name / get_embedding_model_name()
 
     def hybrid_search(
         self,
@@ -774,7 +870,7 @@ class FilingIndex:
         if not weighted_lists:
             if debug:
                 available_docs = list_indexed_docs()
-                faiss_dir = INDEX_DIR / self.doc_name
+                faiss_dir = self.vector_index_dir()
                 print("\n==================================================")
                 print("RETRIEVAL DOCUMENT SCOPE")
                 print("==================================================")
@@ -783,6 +879,7 @@ class FilingIndex:
                 print(f"Available documents: {available_docs}")
                 print(f"BM25 scope: {self.doc_name}")
                 print(f"FAISS scope: {self.doc_name}")
+                print(f"Embedding model: {get_embedding_model_name()}")
                 print(f"FAISS index: {faiss_dir}")
                 print(f"FAISS vectors: {self._faiss_vector_count()}")
                 print(f"Chunk count: {len(self.chunks)}")
@@ -816,13 +913,14 @@ class FilingIndex:
 
         deterministic_ranked = deterministic_rerank(query, candidates, query_info=query_info)
         reranked_top = cross_encoder_rerank(query, deterministic_ranked)[:top_k]
+        reranked_top = _ensure_statement_coverage(reranked_top, deterministic_ranked, query_info, top_k)
         results = expand_chunk_context(reranked_top, self)
 
         if debug:
             table_cnt = sum(1 for c in self.chunks if c.get("chunk_type") == "table")
             text_cnt = len(self.chunks) - table_cnt
             available_docs = list_indexed_docs()
-            faiss_dir = INDEX_DIR / self.doc_name
+            faiss_dir = self.vector_index_dir()
             def _clean(t):
                 return t.encode("ascii", errors="replace").decode("ascii") if t else ""
 
@@ -834,6 +932,7 @@ class FilingIndex:
             print(f"Available documents: {available_docs}")
             print(f"BM25 scope: {self.doc_name}")
             print(f"FAISS scope: {self.doc_name}")
+            print(f"Embedding model: {get_embedding_model_name()}")
             print(f"FAISS index: {faiss_dir}")
             print(f"FAISS vectors: {self._faiss_vector_count()}")
             print(f"Chunk count: {len(self.chunks)} (Text: {text_cnt}, Tables: {table_cnt})")
@@ -949,10 +1048,14 @@ class FilingIndex:
     def is_indexed(self) -> bool:
         return self.bm25 is not None and len(self.chunks) > 0
 
+    def has_vector_index(self) -> bool:
+        return self._faiss_vector_count() > 0
+
     # ---------------- persistence ----------------
 
     def save(self):
         out_dir = INDEX_DIR / self.doc_name
+        vector_dir = self.vector_index_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
 
         with open(out_dir / "chunks.json", "w", encoding="utf-8") as f:
@@ -965,10 +1068,11 @@ class FilingIndex:
             pickle.dump(self.bm25, f)
 
         if self.vector_store is not None:
-            self.vector_store.save(out_dir)
+            self.vector_store.save(vector_dir)
 
         if self.vectors is not None:
-            np.save(out_dir / "vectors.npy", self.vectors)
+            vector_dir.mkdir(parents=True, exist_ok=True)
+            np.save(vector_dir / "vectors.npy", self.vectors)
 
     @classmethod
     def load(cls, doc_name: str) -> Optional["FilingIndex"]:
@@ -995,9 +1099,24 @@ class FilingIndex:
         with open(bm25_path, "rb") as f:
             idx.bm25 = pickle.load(f)
 
-        idx.vector_store = FAISSVectorStore.load(in_dir)
+        embedding_model = get_embedding_model_name()
+        vector_dir = in_dir / embedding_model
+        idx.vector_store = FAISSVectorStore.load(
+            vector_dir,
+            expected_embedding_model=embedding_model,
+            expected_filing_id=doc_name,
+        )
 
-        vectors_path = in_dir / "vectors.npy"
+        if idx.vector_store is None and embedding_model == "normal":
+            idx.vector_store = FAISSVectorStore.load(
+                in_dir,
+                expected_embedding_model=embedding_model,
+                expected_filing_id=doc_name,
+            )
+
+        vectors_path = vector_dir / "vectors.npy"
+        if not vectors_path.exists() and embedding_model == "normal":
+            vectors_path = in_dir / "vectors.npy"
         if vectors_path.exists():
             try:
                 vectors = np.load(vectors_path)
@@ -1009,20 +1128,21 @@ class FilingIndex:
 
 
 def get_index(doc_name: str) -> Optional[FilingIndex]:
-    if doc_name in _INDEX_CACHE:
-        return _INDEX_CACHE[doc_name]
+    cache_key = (get_embedding_model_name(), doc_name)
+    if cache_key in _INDEX_CACHE:
+        return _INDEX_CACHE[cache_key]
     idx = FilingIndex.load(doc_name)
     if idx is not None:
-        _INDEX_CACHE[doc_name] = idx
+        _INDEX_CACHE[cache_key] = idx
     return idx
 
 
 def register_index(doc_name: str, index: FilingIndex):
-    _INDEX_CACHE[doc_name] = index
+    _INDEX_CACHE[(get_embedding_model_name(), doc_name)] = index
 
 
 def list_indexed_docs() -> List[str]:
-    names = set(_INDEX_CACHE.keys())
+    names = {doc_name for _, doc_name in _INDEX_CACHE.keys()}
     if INDEX_DIR.exists():
         for p in INDEX_DIR.iterdir():
             if p.is_dir() and (p / "chunks.json").exists():

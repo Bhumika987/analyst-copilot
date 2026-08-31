@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from ingest import ingest_filing_stream, ingest_bulk_filings_stream
 from llm import answer_question, get_embedding, stream_answer
 from retrieval import get_index, list_indexed_docs, cross_filing_hybrid_search
+from config import get_embedding_model_name
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -37,7 +38,11 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     question: str
     doc_name: Optional[str] = "all"
-    top_k: int = 8
+    # Widened alongside llm.py's _context_chunk_limit ceiling (8 -> 10 for
+    # comparison/calculation questions) -- retrieval has to hand over a pool
+    # wider than that ceiling for it to mean anything; narrowing here would
+    # silently make that widening a no-op.
+    top_k: int = 12
 
 
 def _sse(event: dict) -> str:
@@ -52,7 +57,7 @@ async def startup_load_indexes():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "indexed_docs": len(list_indexed_docs())}
+    return {"status": "ok", "indexed_docs": len(list_indexed_docs()), "embedding_model": get_embedding_model_name()}
 
 
 @app.get("/api/filings")
@@ -68,6 +73,8 @@ async def list_filings():
             "chunk_count": len(idx.chunks),
             "pages": {"min": pages[0], "max": pages[-1]} if pages else None,
             "metadata": idx.metadata,
+            "embedding_model": get_embedding_model_name(),
+            "vector_index_path": str(idx.vector_index_dir()),
         })
     return result
 
@@ -141,6 +148,7 @@ async def chat(req: ChatRequest):
             for c in results
         ]
         yield _sse({"type": "chunks", "chunks": chunk_meta})
+        yield _sse({"type": "embedding_model", "embedding_model": get_embedding_model_name()})
 
         async for event in stream_answer(req.question, target_doc, results):
             if event.get("type") == "result":
@@ -152,6 +160,8 @@ async def chat(req: ChatRequest):
                 print(f"sources: {event.get('sources')}")
                 dbg = event.get("debug_info", {})
                 print(f"retrieval_status: {dbg.get('retrieval_status')}")
+                if event.get("error"):
+                    print(f"error: {event.get('error')}")
                 print("==================================================\n")
             yield _sse(event)
 
@@ -166,6 +176,7 @@ async def chat_sync(req: ChatRequest):
 
     result = await answer_question(req.question, target_doc, results)
     response = result.to_dict()
+    response["embedding_model"] = get_embedding_model_name()
     response["chunks_used"] = [
         {
             "chunk_idx": c.get("chunk_idx"),
@@ -192,6 +203,8 @@ async def chat_sync(req: ChatRequest):
     print(f"sources: {response.get('sources')}")
     dbg = response.get("debug_info", {})
     print(f"retrieval_status: {dbg.get('retrieval_status')}")
+    if response.get("error"):
+        print(f"error: {response.get('error')}")
     print("==================================================\n")
 
     return response

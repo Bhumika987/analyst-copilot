@@ -12,6 +12,7 @@ from typing import AsyncGenerator, Dict, List, Tuple
 import numpy as np
 
 from llm import get_embedding
+from config import get_embedding_model_name
 from filing_parser import parse_filing_to_window_chunks, extract_filing_metadata
 from retrieval import FilingIndex, register_index
 
@@ -46,9 +47,10 @@ async def ingest_filing_stream(filepath: str, doc_name: str, use_embeddings: boo
         yield {"type": "progress", "doc_name": doc_name, "message": "BM25 index built.", "progress": 0.25}
 
         if use_embeddings:
-            yield {"type": "progress", "doc_name": doc_name, "message": "Generating BGE FAISS semantic embeddings...", "progress": 0.40}
+            embedding_model = get_embedding_model_name()
+            yield {"type": "progress", "doc_name": doc_name, "message": f"Generating {embedding_model} FAISS semantic embeddings...", "progress": 0.40}
             await run_blocking(index.build_bge_faiss)
-            yield {"type": "progress", "doc_name": doc_name, "message": "BGE FAISS semantic vector index built.", "progress": 0.90}
+            yield {"type": "progress", "doc_name": doc_name, "message": f"{embedding_model} FAISS semantic vector index built.", "progress": 0.90}
         else:
             yield {"type": "progress", "doc_name": doc_name, "message": "Skipping embeddings (BM25-only mode).", "progress": 0.90}
 

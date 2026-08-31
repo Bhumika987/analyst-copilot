@@ -1,0 +1,77 @@
+{
+  "summary": {
+    "total": 5,
+    "counts": {
+      "0_wrong_page": 4,
+      "-1": 1
+    },
+    "score": -1
+  },
+  "results": [
+    {
+      "doc_name": "AMD_2022_10K",
+      "question": "What are the major products and services that AMD sells as of FY22?",
+      "gold_answer": "AMD sells server microprocessors (CPUs) and graphics processing units (GPUs), data processing units (DPUs), Field Programmable Gate Arrays (FPGAs), and Adaptive System-on-Chip (SoC) products for data centers; CPUs, accelerated processing units (APUs) that integrate CPUs and GPUs, and chipsets for desktop and notebook personal computers; discrete GPUs, and semi-custom SoC products and development services; and embedded CPUs, GPUs, APUs, FPGAs, and Adaptive SoC products.",
+      "gold_page": 3,
+      "predicted_found": true,
+      "predicted_answer": "AMD’s major products and services in fiscal 2022 include  \n\n* **x86 microprocessors (CPUs)** – desktop, notebook and server processors (e.g., Ryzen and EPYC families)  \n* **Graphics processing units (GPUs)** – Radeon and Radeon PRO graphics for consumer, professional and data‑center markets  \n* **Accelerated processing units (APUs)** – combined CPU‑GPU chips for client devices  \n* **Chipsets** for desktops and notebooks  \n* **Data‑center products** – server CPUs, GPUs, data‑processing units (DPUs), field‑programmable gate arrays (FPGAs) and Adaptive SoC products (added through the Xilinx acquisition)  \n* **Embedded processors and GPUs** – CPUs, GPUs, APUs for embedded applications  \n* **Semi‑custom System‑on‑Chip (SoC) products** – custom‑designed chips for gaming consoles and other OEMs  \n* **Field‑Programmable Gate Arrays (FPGAs) and Adaptive SoCs** – Virtex, Kintex, Artix families and Zynq/Versal platforms (from Xilinx)  \n* **Design and development services** – non‑recurring engineering (NRE) fees for custom design work and related software tools (e.g., development kits, compilers, drivers)  \n\nThese offerings are described in the Business section of AMD’s 2022 Form 10‑K, which lists the company’s product portfolio and the services it provides to customers【Passage 2 | PAGE: 12】.",
+      "predicted_page": 60,
+      "reason": "0_wrong_page",
+      "points": 0,
+      "judge_method": "semantic (CORRECT)",
+      "error": null
+    },
+    {
+      "doc_name": "AMD_2022_10K",
+      "question": "What drove revenue change as of the FY22 for AMD?",
+      "gold_answer": "In 2022, AMD reported Higher sales of their EPYC server processors, higher semi-custom product sales, and the inclusion of Xilinx embedded product sales",
+      "gold_page": 42,
+      "predicted_found": true,
+      "predicted_answer": "The increase in FY 2022 revenue was driven primarily by a strong rebound in the Data Center segment, which grew 64% year‑over‑year, offset partially by declines in the Client and Gaming segments.\n\nANALYSIS:\n- AMD reported FY 2022 net revenue of $23.6 billion, up 44% versus 2021 ($16.4 billion)【Passage 4】.  \n- The MD&A explains that the revenue increase “was driven by a 64% increase in Data Center segment revenue” due to higher sales of EPYC server processors【Passage 4】.  \n- The Client segment revenue fell 10% and Gaming revenue grew only modestly, indicating the Data Center growth was the main source of the overall revenue change.",
+      "predicted_page": 43,
+      "reason": "-1",
+      "points": -1,
+      "judge_method": "semantic (INCORRECT)",
+      "error": null
+    },
+    {
+      "doc_name": "AMD_2022_10K",
+      "question": "What drove operating margin change as of the FY22 for AMD? If operating margin is not a useful metric for a company like this, then please state that and explain why.",
+      "gold_answer": "The decrease in AMD's operating income was primarily driven by amortization of intangible assets associated with the Xilinx acquisition",
+      "gold_page": 42,
+      "predicted_found": true,
+      "predicted_answer": "AMD’s operating margin fell sharply in FY 2022, dropping from about **22 % in FY 2021 to roughly **5 % in FY 2022**. The decline was driven primarily by a massive increase in “All Other” operating losses (mainly amortization of acquisition‑related intangibles, stock‑based compensation and acquisition‑related costs) that more than offset the modest improvement in segment operating income.\n\nANALYSIS:  \n- FY 2022 total operating income (loss) = **$1,264 million**; total net revenue = **$23,601 million** (Passage 5/6).  \n  Operating margin FY 2022 = 1,264 / 23,601 ≈ 0.0536 → **5.4 %**.  \n- FY 2021 total operating income (loss) = **$3,648 million**; total net revenue = **$16,434 million** (Passage 5/6).  \n  Operating margin FY 2021 = 3,648 / 16,434 ≈ 0.222 → **22.2 %**.  \n\nThe segment table shows that “All Other” incurred an operating loss of **$4,979 million** in FY 2022 versus **$409 million** in FY 2021 (Passage 8). This large loss, driven by amortization of acquisition‑related intangibles, stock‑based compensation, and acquisition‑related costs, pulled the consolidated operating income down despite higher revenues and modest gains in Data Center, Client and Gaming segments.\n\nThus, the operating‑margin change was mainly caused by the surge in “All Other” expenses related to the Xilinx acquisition and related intangibles, not by a decline in core operating performance.\n\nThe operating margin remains a useful metric for AMD because it reflects how efficiently the company converts revenue into operating profit after accounting for all operating costs, including significant acquisition‑related charges that materially affect profitability.",
+      "predicted_page": 49,
+      "reason": "0_wrong_page",
+      "points": 0,
+      "judge_method": "semantic (CORRECT)",
+      "error": null
+    },
+    {
+      "doc_name": "AMD_2022_10K",
+      "question": "Among operations, investing, and financing activities, which brought in the most (or lost the least) cash flow for AMD in FY22?",
+      "gold_answer": "In 2022, AMD brought in the most cashflow from Operations",
+      "gold_page": 57,
+      "predicted_found": true,
+      "predicted_answer": "Operating activities provided the most cash flow for AMD in FY 2022, with net cash provided of $3,565 million, which is higher than the $1,999 million from investing activities and the $3,264 million cash outflow from financing activities.",
+      "predicted_page": 58,
+      "reason": "0_wrong_page",
+      "points": 0,
+      "judge_method": "semantic (CORRECT)",
+      "error": null
+    },
+    {
+      "doc_name": "AMD_2022_10K",
+      "question": "From FY21 to FY22, excluding Embedded, in which AMD reporting segment did sales proportionally increase the most?",
+      "gold_answer": "Data Center",
+      "gold_page": 47,
+      "predicted_found": true,
+      "predicted_answer": "Data Center segment\n\nANALYSIS:\n- Net revenue FY 2022 and FY 2021 (excluding Embedded) are shown in the segment table:\n\n  * Data Center: $6,043 million in 2022 and $3,694 million in 2021【Passage 7】  \n  * Client: $6,201 million in 2022 and $6,887 million in 2021【Passage 7】  \n  * Gaming: $6,805 million in 2022 and $5,607 million in 2021【Passage 7】\n\n- Proportional change = (2022 – 2021) ÷ 2021  \n\n  * Data Center: (6,043 – 3,694) ÷ 3,694 = 2,349 ÷ 3,694 ≈ **63.6 %**  \n  * Client: (6,201 – 6,887) ÷ 6,887 = –686 ÷ 6,887 ≈ **‑10.0 %**  \n  * Gaming: (6,805 – 5,607) ÷ 5,607 = 1,198 ÷ 5,607 ≈ **21.4 %**\n\n- The Data Center segment experienced the largest proportional increase (≈ 64 %) from FY 2021 to FY 2022.",
+      "predicted_page": 48,
+      "reason": "0_wrong_page",
+      "points": 0,
+      "judge_method": "semantic (CORRECT)",
+      "error": null
+    }
+  ]
+}

@@ -92,10 +92,18 @@ def extract_evidence_notes(question: str, query_info: QueryAnalysis, chunks: Lis
         return ""
 
     mode = "calculate" if query_info.requires_calculation else "extract"
-    return (
+    header = (
         "DETERMINISTIC EVIDENCE NOTES\n"
         f"QUESTION_MODE: {mode}\n"
         f"TARGET_YEARS: {', '.join(query_info.target_years) if query_info.target_years else 'not specified'}\n"
         f"METRIC_OR_CONCEPT: {', '.join(query_info.normalized_concepts) if query_info.normalized_concepts else 'not normalized'}\n"
-        + "\n".join(notes)
     )
+    # The question named a ratio/verdict framework (e.g. "quick ratio",
+    # "capital-intensive") without spelling out its formula. Without this,
+    # the model either declares the question unanswerable because no single
+    # line item matches the name literally, or eyeballs a verdict from raw
+    # dollar figures instead of computing it. Surface the formula so it
+    # combines the retrieved line items instead.
+    if getattr(query_info, "derived_ratio_formula", ""):
+        header += f"REQUIRED_RATIO_FORMULA: {query_info.derived_ratio_formula}\n"
+    return header + "\n".join(notes)

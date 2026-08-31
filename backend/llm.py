@@ -1,5 +1,5 @@
 """
-Groq LLM integration + a lightweight local embedding fallback.
+Groq LLM integration and answer generation.
 
 Two safety mechanisms matter more than anything else here, because the
 scoring rubric punishes a wrong answer (-1) far harder than it rewards a
@@ -13,7 +13,6 @@ right one (+1), while abstaining is always 0:
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -23,8 +22,27 @@ from pathlib import Path
 import httpx
 import numpy as np
 
+from embedding_service import get_embedding_provider
+
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-120b"
+
+FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
+CEREBRAS_API_URL = "https://api.cerebras.ai/v1/chat/completions"
+
+# .env keys this module reads on startup, mirroring config.py's pattern for
+# EMBEDDING_MODEL: first environment variable already set wins, .env only
+# fills in what isn't.
+_ENV_KEYS = (
+    "GROQ_API_KEY", "ANTHROPIC_API_KEY", "LLM_PROVIDER", "CLAUDE_MODEL",
+    # Bedrock (both "bedrock" and "bedrock_openai"): AWS_REGION is required
+    # (no fallback), and both providers call Bedrock's native HTTP endpoints
+    # directly with an Amazon Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) --
+    # no AWS access key pair, boto3, or IAM role needed.
+    "AWS_REGION", "BEDROCK_MODEL", "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_OPENAI_MODEL",
+    "FIREWORKS_API_KEY", "FIREWORKS_MODEL", "CEREBRAS_API_KEY", "CEREBRAS_MODEL",
+)
+
 
 def _load_env():
     for p in [Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env", Path(__file__).resolve().parent / ".env"]:
@@ -32,15 +50,91 @@ def _load_env():
             try:
                 for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
                     line = line.strip()
-                    if line.startswith("GROQ_API_KEY=") and not os.environ.get("GROQ_API_KEY"):
-                        val = line.split("=", 1)[1].strip(" '\"")
-                        if val:
-                            os.environ["GROQ_API_KEY"] = val
+                    for key in _ENV_KEYS:
+                        if line.startswith(f"{key}=") and not os.environ.get(key):
+                            val = line.split("=", 1)[1].strip(" '\"")
+                            if val:
+                                os.environ[key] = val
             except Exception:
                 pass
 
 _load_env()
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AWS_REGION = os.environ.get("AWS_REGION", "")
+AWS_BEARER_TOKEN_BEDROCK = os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
+FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY", "")
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+
+# Which LLM backend answer_question()/stream_answer() call. "groq" (default)
+# keeps the existing free-tier path; "claude" routes through the first-party
+# Anthropic API; "bedrock" routes Claude through Amazon Bedrock's native
+# Messages route instead -- set LLM_PROVIDER=bedrock if you want AWS billing
+# rather than an ANTHROPIC_API_KEY. "bedrock_openai", "fireworks", and
+# "cerebras" are the same model family on three other hosts: all call
+# OpenAI's open-weight gpt-oss-120b -- the same model this project's Groq
+# default already serves -- through an OpenAI-compatible Chat Completions
+# endpoint, so you get the current Groq behavior/quality without Groq's
+# free-tier rate limit, billed through AWS/Fireworks/Cerebras instead. Both
+# Bedrock providers authenticate with a Bedrock API key
+# (AWS_BEARER_TOKEN_BEDROCK) over plain HTTPS -- no boto3/AWS SigV4
+# credentials required. Claude is meaningfully more capable than gpt-oss-120b,
+# but it is a paid, metered API either way (no free tier like Groq), so
+# switching to "claude" or "bedrock" is a cost decision, not just a config
+# flip.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
+_SUPPORTED_PROVIDERS = ("groq", "claude", "bedrock", "bedrock_openai", "fireworks", "cerebras")
+if LLM_PROVIDER not in _SUPPORTED_PROVIDERS:
+    raise ValueError(
+        f"Unsupported LLM_PROVIDER={LLM_PROVIDER!r}. Supported values: {', '.join(_SUPPORTED_PROVIDERS)}"
+    )
+
+# claude-haiku-4-5 by user choice -- cheapest/fastest Claude tier, no
+# shared per-minute rate limit like Groq's free tier. Override via
+# CLAUDE_MODEL in .env (e.g. claude-sonnet-5 or claude-opus-5) if answer
+# quality on the harder calculation/judgment questions matters more than
+# cost per question for your use case.
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
+
+# Bedrock model IDs for Claude on the bedrock-runtime endpoint are the full
+# dated snapshot ID, not the bare friendly name -- and in us-east-1
+# specifically, only the "us."/"global."-prefixed cross-region inference
+# profile works, not the bare in-region ID (confirmed against AWS's model
+# card: verified this exact string against a live 400 "invalid model
+# identifier" error before landing on it). Override via BEDROCK_MODEL in
+# .env; check the Bedrock console's model catalog (Programmatic Access
+# section on the model's page) if your region/account needs a different
+# exact string.
+BEDROCK_MODEL = os.environ.get("BEDROCK_MODEL", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+
+# gpt-oss-120b via Bedrock's OpenAI-compatible endpoint -- same model as
+# GROQ_MODEL above, different host. AWS's actual model ID carries a version
+# suffix ("-1:0") that the bare "openai.gpt-oss-120b" name lacks -- confirmed
+# against a live 400 "invalid model identifier" error before landing on
+# this exact string. Override via BEDROCK_OPENAI_MODEL in .env, e.g.
+# "openai.gpt-oss-20b-1:0" for the smaller/cheaper/faster tier.
+BEDROCK_OPENAI_MODEL = os.environ.get("BEDROCK_OPENAI_MODEL", "openai.gpt-oss-120b-1:0")
+
+# gpt-oss-120b via Fireworks AI -- same model, third host. Override via
+# FIREWORKS_MODEL in .env, e.g. "accounts/fireworks/models/gpt-oss-20b".
+FIREWORKS_MODEL = os.environ.get("FIREWORKS_MODEL", "accounts/fireworks/models/gpt-oss-120b")
+
+# gpt-oss-120b via Cerebras -- same model, fourth host, wafer-scale inference
+# (fast). Override via CEREBRAS_MODEL in .env, e.g. "gpt-oss-20b" for the
+# smaller/cheaper/faster tier if Cerebras offers it.
+CEREBRAS_MODEL = os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b")
+
+# bedrock-runtime endpoints -- region-scoped, like every Bedrock endpoint.
+# Built from AWS_REGION rather than hardcoded so both track whichever region
+# the account's model access is enabled in. The Messages route mirrors
+# Anthropic's own request/response shape (unlike Invoke/Converse); the Chat
+# Completions route mirrors OpenAI's.
+BEDROCK_MESSAGES_API_URL = (
+    f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com/anthropic/v1/messages" if AWS_REGION else ""
+)
+BEDROCK_OPENAI_API_URL = (
+    f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com/openai/v1/chat/completions" if AWS_REGION else ""
+)
 
 
 # Free-tier Groq keys are capped at a modest tokens-per-minute budget shared
@@ -49,149 +143,341 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 # instruction-following on a task this constrained (quote-and-cite).
 REASONING_EFFORT = "low"
 
-# Below this retrieval score, the top chunk isn't strong enough evidence
-# to even bother asking the LLM. Lowered to avoid false-negative gating when valid hits are present.
-CONFIDENCE_THRESHOLD = 0.001
+# Hard cap per context passage sent to the LLM. Confirmed as a real, costly
+# bug at 1400: a full Consolidated Balance Sheet table ran 2441 chars, and
+# "Total current liabilities" -- the specific line a quick-ratio/current-
+# ratio/working-capital question needed -- sat at char 1484, past the old
+# cutoff. The model didn't hallucinate or misread; it never saw the line,
+# because Assets always lists before Liabilities in these tables and the
+# cut landed mid-statement. Any calculation spanning both sides of a
+# balance sheet (which is most balance-sheet ratios) was exposed to this
+# whenever the table ran long. Raised well past that table's length, with
+# margin for larger ones (income statements with segment breakdowns, debt
+# schedules) -- 8 chunks x ~3000 chars is still comfortably inside a
+# 128K-token context window.
+MAX_PASSAGE_CHARS = 3000
 
-# Hard cap per context passage sent to the LLM.
-MAX_PASSAGE_CHARS = 1400
+SYSTEM_PROMPT = """You are a financial analyst answering questions using evidence retrieved from SEC 10-K and 10-Q filings.
 
-EMBED_DIM = 256
-_embed_cache: Dict[str, np.ndarray] = {}
+You will receive:
 
-SYSTEM_PROMPT = """You are an expert financial analyst assistant.
+QUESTION:
+{question}
 
-The provided context contains passages retrieved from SEC 10-K and 10-Q filings. 
-These passages have already passed evidence validation and should be treated as the available financial evidence for answering the question.
+EVIDENCE:
+{evidence}
 
-Your task is to provide the most accurate, direct, and grounded answer to the user's question using the provided evidence.
+The supplied evidence is the only factual source you may use.
 
-STRICT GENERATION RULES:
+## Primary objective
 
-1. FIND THE ANSWER IN THE PROVIDED EVIDENCE
-   Examine the provided passages and identify the passage or combination of passages that directly supports the answer.
+Answer the question accurately, directly, and completely using the strongest available evidence.
 
-   Do NOT assume that the first passage is always the answer.
-   Do NOT assume that the last passage is the answer.
-   Determine the answer based on the actual content of the evidence.
+Before answering, verify:
 
-2. ANSWER WHEN VALIDATED EVIDENCE SUPPORTS THE ANSWER
-   If any provided passage contains the requested financial concept together with the relevant period and numerical value, use that evidence to answer the question.
+* the company, subsidiary, segment, or other entity
+* the requested financial metric or concept
+* the fiscal year, quarter, comparison period, or reporting date
+* the currency and unit
+* the table title, row label, and column heading when applicable
+* whether the question requests a reported value, calculation, comparison, trend, or analytical conclusion
 
-   Do NOT return NOT_FOUND or claim that evidence is insufficient when the provided context contains enough information to answer.
+Do not select evidence based on passage order.
 
-3. PRIORITIZE DIRECT EVIDENCE
-   When multiple passages are available, prefer evidence in this order:
+## Evidence priority
 
-   a. Direct financial statement or table containing the requested value
-   b. Direct disclosure containing the requested value
-   c. Supporting narrative that explicitly states the requested value
-   d. Other contextual evidence
+Prefer evidence in this order:
 
-   Retrieval order alone must NOT determine which evidence is used.
+1. A financial statement or table directly containing the requested value
+2. A footnote or direct filing disclosure
+3. A narrative disclosure explicitly reporting the value or conclusion
+4. Other context necessary to interpret the primary evidence
 
-4. MATCH THE QUESTION
-   Before selecting the answer, verify that the evidence corresponds to the requested:
+Use one passage when it independently answers the question.
 
-   - company/entity
-   - financial metric/concept
-   - fiscal year or quarter
-   - reporting period
-   - unit/currency
-   - statement or section, if specified by the question
+Combine passages only when necessary, such as when:
 
-5. PRESERVE THE ORIGINAL FINANCIAL VALUE
-   Extract the numerical value exactly as supported by the evidence.
+* a calculation requires values from different statements
+* a comparison requires multiple periods or segments
+* an analytical question requires several financial indicators
 
-   Preserve:
-   - currency
-   - units
-   - fiscal period
-   - sign of the value
-   - relevant table column
+Only combine values that concern the correct entity, metric, period, currency, and unit.
 
-   Do not change or reinterpret the reported value.
+## Directly reported answers
 
-6. TABLES
-   For table-based evidence, interpret the value using the table's:
-   - row label
-   - column header
-   - reporting period
-   - unit
-   - table title
+When the requested answer is directly reported:
 
-   Do not use a number from a different row or period simply because it appears in the same passage.
+* reproduce the value accurately
+* include its currency and scale when applicable
+* identify the fiscal period or reporting date
+* preserve negative signs, parentheses, percentages, and other meaningful notation
+* use the exact table row and correct period column
 
-7. MULTIPLE PASSAGES
-   Use multiple passages only when necessary to establish the answer.
+Do not calculate a different metric when the requested metric is already directly reported unless the question explicitly requests recalculation.
 
-   If one passage independently contains sufficient evidence, answer using that passage.
+## Tables
 
-   If multiple passages are required, combine them only when they clearly refer to the same company, filing, metric, and period.
+Read financial tables using all of the following:
 
-8. CALCULATIONS
-   If the question requires a calculation:
+* table title
+* row label
+* column heading
+* period
+* currency
+* scale or unit
+* footnotes when necessary
 
-   - use only numbers contained in the provided evidence
-   - show the formula
-   - show the calculation
-   - provide the final result with the correct unit
+Do not take a number from a neighboring row, column, or fiscal period.
 
-   Do not introduce external numbers or assumptions.
+A table may contain several related but distinct columns. For example, a sales-growth table may contain Organic, Acquisitions, Divestitures, Translation, and Total change. These figures are not interchangeable.
 
-9. NO HALLUCINATION
-   Never invent:
-   - financial values
-   - dates
-   - periods
-   - units
-   - page numbers
-   - calculations
-   - information not supported by the evidence
+When a question asks for organic performance or excludes acquisitions, divestitures, or other M&A effects, use the Organic column. Do not select the Total column merely because it has the largest change.
 
-10. INSUFFICIENT EVIDENCE
-   Return NOT_FOUND only when the provided evidence genuinely does not contain enough information to answer the question.
+## Calculations
 
-   Do not return NOT_FOUND merely because:
-   - the first passage is not sufficient
-   - passages contain different pieces of supporting information
-   - the wording differs from the wording in the question
-   - the answer requires interpreting a financial table
-   - the relevant evidence appears in a later passage
+When a calculation is required:
 
-11. SOURCE
-   Cite the passage or passages that directly support the answer.
+1. State the formula.
+2. Identify the values used.
+3. Substitute the values.
+4. Perform the calculation.
+5. Report the result with an appropriate unit and reasonable rounding.
 
-OUTPUT FORMAT:
+Use only values present in the supplied evidence.
+
+Do not:
+
+* invent missing inputs
+* silently mix thousands, millions, and billions
+* mix values from incompatible periods
+* mix consolidated and segment-level values
+* substitute a related but different financial metric without explaining it
+* treat percentages and percentage-point changes as equivalent
+
+When values have different scales, convert them to a consistent scale before calculating.
+
+Unless the question or evidence specifies otherwise:
+
+* Ratio = numerator / denominator
+* Percentage ratio = numerator / denominator × 100
+* Percentage change = (new value - old value) / old value × 100
+* Percentage-point change = new percentage - old percentage
+
+When an average-balance formula is explicitly required, use the average of the beginning and ending balances. Otherwise, do not introduce an average balance unless the supplied formula or question requires it.
+
+## Required formulas and fallback inputs
+
+If the evidence contains `REQUIRED_RATIO_FORMULA`, use that formula.
+
+If the formula specifies:
+
+* preferred line items, and
+* an allowed fallback when the preferred items are unavailable,
+
+use the preferred calculation when all necessary inputs are present. Otherwise, use the stated fallback when its required inputs are present.
+
+Do not return `NOT_FOUND` merely because the preferred breakdown is unavailable when the permitted fallback can be calculated.
+
+Clearly identify when a fallback calculation was used.
+
+## Comparisons and trends
+
+For comparison questions:
+
+* use comparable values for all periods, segments, or companies
+* calculate both the absolute change and percentage change when useful
+* distinguish increase/decrease from positive/negative values
+* distinguish year-over-year change from sequential change
+* do not call a change material, significant, strong, or weak unless the filing states it or the conclusion is clearly framed as an interpretation
+
+For questions asking “why” a value changed, use only causes explicitly disclosed in the evidence. Do not infer an operational cause solely from the numerical change.
+
+## Yes/no factual questions
+
+For a factual yes/no question, answer “Yes” or “No” only when the evidence directly establishes the fact.
+
+Briefly explain the supporting evidence.
+
+If the evidence does not establish the fact, return `NOT_FOUND`.
+
+## Analytical and classification questions
+
+Some questions ask for an analytical assessment rather than a directly reported fact. Examples include:
+
+* Is the company capital-intensive?
+* Is liquidity improving?
+* Is leverage high?
+* Did profitability weaken?
+* Is the company efficiently using its assets?
+* Does the company appear financially healthy?
+
+For these questions:
+
+1. Calculate or identify the relevant financial indicators.
+2. Use an explicit threshold or decision rule when one is supplied.
+3. If no threshold is supplied, determine whether the evidence still supports a reasonable directional assessment.
+4. If it does, provide a qualified conclusion and clearly state that it is an analytical interpretation, not a classification based on an explicit threshold.
+5. If the evidence is insufficient even for a reasonable directional assessment, return `NOT_FOUND`.
+
+Do not claim that a universal financial threshold exists when none was supplied. Financial classifications may depend on industry, business model, accounting treatment, and comparison period.
+
+Use wording such as:
+
+* “Based on the supplied FY2022 metrics, the company does not appear highly capital-intensive.”
+* “The evidence suggests that liquidity improved.”
+* “This is a directional assessment because no explicit classification threshold was supplied.”
+
+Do not refuse to answer an analytical question solely because no numerical threshold was provided when the evidence contains the relevant metrics and supports a cautious conclusion.
+
+Do not produce an absolute or universal conclusion when the evidence supports only a qualified interpretation.
+
+## Capital-intensity questions
+
+When evaluating capital intensity, use the indicators available in the evidence, which may include:
+
+* capital expenditures divided by revenue
+* net PP&E divided by total assets
+* depreciation and amortization
+* asset turnover
+* return on assets
+* capital expenditures relative to operating cash flow
+* management’s description of capital requirements
+* comparisons with prior periods or industry benchmarks when supplied
+
+Do not classify a company using one raw dollar amount alone.
+
+If the evidence supplies multiple relevant ratios but no threshold, provide a qualified assessment based on their combined direction.
+
+For example, relatively modest CAPEX as a percentage of revenue, a limited proportion of assets held in net PP&E, and a positive ROA may support the qualified conclusion that the company does not appear highly capital-intensive. State that this is an analytical interpretation when no explicit benchmark is supplied.
+
+## Accounting terminology
+
+Treat related accounting terms carefully.
+
+Do not automatically assume that:
+
+* sales always equals total revenue
+* net income always equals net income attributable to the company
+* operating income equals adjusted operating income
+* debt equals total liabilities
+* cash equals cash and cash equivalents plus marketable securities
+* purchases of PP&E always equals every possible definition of CAPEX
+* book value equals market value
+* basic EPS equals diluted EPS
+* gross PP&E equals net PP&E
+
+Use the term and value that best match the question. If a reasonable proxy is necessary and supported by the evidence, identify it explicitly.
+
+## Negative values and cash-flow presentation
+
+Parentheses in financial statements commonly indicate negative values or cash outflows.
+
+Preserve the financial meaning while presenting calculations clearly. For example, when calculating CAPEX as a positive spending amount from a cash-flow line displayed as `(1,749)`, use $1,749 million as the magnitude and explain that it was reported as a cash outflow.
+
+Do not accidentally produce a negative spending ratio solely because the statement displays the cash outflow in parentheses.
+
+## Rounding and numerical equivalence
+
+Use reasonable rounding based on the question and evidence.
+
+Small rounding differences are acceptable when they arise from the same underlying values. For example:
+
+* 5.11% may be reported as 5.1%
+* 19.76% may be reported as 19.8% or approximately 20%
+* 12.47% may be reported as 12.5%
+
+Do not create false precision beyond what the evidence supports.
+
+## Exhibit lists are not substantive evidence
+
+An “Exhibit Index” or “Item 15 – Exhibits” table lists documents filed alongside the filing. It is not evidence of what those documents contain.
+
+For example, an exhibit titled “Description of Registrant’s Securities” does not itself establish that a security is registered on a national exchange.
+
+For questions about securities registered under Section 12(b), use:
+
+* the filing cover-page table listing the security title, ticker symbol, and exchange, or
+* an equivalent direct disclosure
+
+If that evidence is absent, return `NOT_FOUND`. If the relevant table explicitly lists no securities, answer that there are none.
+
+## Missing or insufficient evidence
+
+Return `NOT_FOUND` only when the evidence lacks enough information to:
+
+* answer the requested fact
+* perform the required calculation
+* make the requested comparison
+* support even a qualified analytical conclusion
+
+Before returning `NOT_FOUND`, check whether:
+
+* the answer is directly disclosed
+* the required values appear across multiple passages
+* a supplied formula can be calculated
+* an allowed fallback formula can be used
+* a qualified analytical conclusion is supported
+
+Do not use outside knowledge, assumptions, fabricated values, or unsupported thresholds.
+
+## Citations
+
+Cite every material reported value used in the answer.
+
+For a calculation using values from multiple pages, provide a source for each required input.
+
+Use short supporting quotations. Do not quote an entire table or long paragraph.
+
+Use the page number attached to the relevant evidence passage. Do not infer a page number merely from passage order.
+
+## Output format
+
+For a directly reported answer:
 
 ANSWER: [direct answer]
 
-SOURCE: Page [N] - "[short exact quote supporting the answer]"
+SOURCE: Page [page number] - "[short exact supporting quote]"
 
-If multiple sources are required:
+For a calculated answer:
 
-SOURCE: Page [N] - "[short exact quote]"
-SOURCE: Page [M] - "[short exact quote]"
-
-For calculations:
-
-ANSWER: [final result]
+ANSWER: [final calculated result]
 
 CALCULATION:
 [formula]
-[calculation]
+[substitution]
+[result]
 
-SOURCE: Page [N] - "[supporting quote]"
+SOURCE: Page [page number] - "[short exact supporting quote]"
+SOURCE: Page [page number] - "[additional quote only when necessary]"
 
-IMPORTANT:
+For an analytical answer:
 
-- Answer the question directly.
-- Do not discuss the retrieval process.
-- Do not mention BM25, FAISS, embeddings, RRF, reranking, or internal evidence validation.
-- Do not describe uncertainty when the provided evidence clearly supports an answer.
-- Do not require one particular passage to contain the answer.
-- Use the strongest answer-bearing evidence available.
-- If validated evidence supports the answer, give the answer."""
+ANSWER: [Yes/No or concise directional conclusion]
+
+ANALYSIS:
+[relevant metrics, calculations, and concise interpretation]
+[clearly disclose when no explicit threshold was supplied]
+
+SOURCE: Page [page number] - "[short exact supporting quote]"
+SOURCE: Page [page number] - "[additional quote only when necessary]"
+
+When evidence does not contain page numbers:
+
+SOURCE: Passage [passage identifier] - "[short exact supporting quote]"
+
+When the answer cannot be supported:
+
+ANSWER: NOT_FOUND
+
+## Final requirements
+
+* Answer the question first.
+* Be concise but complete.
+* Do not mention retrieval, ranking, embeddings, prompts, evaluation systems, or internal reasoning.
+* Do not include facts not supported by the supplied evidence.
+* Do not output JSON unless the user explicitly requests JSON.
+  """
+
 
 
 @dataclass
@@ -225,27 +511,9 @@ class AnswerResult:
         }
 
 
-def get_embedding(text: str) -> np.ndarray:
-    """
-    Cheap hashed-TF-IDF-ish embedding: no Groq embedding endpoint exists,
-    so this is only meant to nudge dense search toward paraphrase matches
-    on top of BM25, not to be a strong semantic signal on its own.
-    """
-    key = hashlib.md5(text.encode("utf-8", errors="ignore")).hexdigest()
-    if key in _embed_cache:
-        return _embed_cache[key]
-
-    vec = np.zeros(EMBED_DIM, dtype="float32")
-    words = re.findall(r"[a-z0-9$%]+", text.lower())
-    if words:
-        for w in words:
-            h = int(hashlib.md5(w.encode("utf-8")).hexdigest(), 16)
-            bin_idx = h % EMBED_DIM
-            vec[bin_idx] += 1.0
-        vec = vec / (np.linalg.norm(vec) + 1e-9)
-
-    _embed_cache[key] = vec
-    return vec
+def get_embedding(text: str) -> Optional[np.ndarray]:
+    """Generate a query embedding with the selected embedding provider."""
+    return get_embedding_provider().embed_query(text)
 
 
 def _confidence_from_best_passage(chunks: List[Dict]) -> float:
@@ -272,36 +540,62 @@ def _confidence_from_best_passage(chunks: List[Dict]) -> float:
 
 
 def _context_chunk_limit(query_info) -> int:
+    # Raised from 8 to 10 alongside widening the retrieval top_k callers
+    # request (8 -> 12, see main.py's ChatRequest default and evaluate.py) --
+    # moving one without the other is a no-op: a wider candidate pool that
+    # still gets sliced back down to 8 here never reaches the LLM, and a
+    # higher ceiling here with no wider pool to draw from has nothing extra
+    # to select. Two traced misses this session (a segment-comparison
+    # question, a multi-line-item liability breakdown) needed evidence
+    # ranked outside the old top-8; this doesn't guarantee either specific
+    # case now succeeds (the evidence still has to rank in the top 10, and
+    # for one of them it may not exist in any retrieved candidate at all),
+    # but it's a genuine widening of the room comparison/calculation
+    # questions have to work with, not just a page relabeled.
     if not query_info:
         return 4
     if getattr(query_info, "requires_multiple_evidence_chunks", False):
-        return 8
+        return 10
     if getattr(query_info, "query_type", "") in ("COMPARISON", "TREND", "CALCULATION"):
-        return 8
+        return 10
     return 5
 
 
-def _format_context(chunks: List[Dict], max_chunks: int = 4) -> tuple:
-    """
-    Format top validated context passages for LLM generation.
-    Preserves retrieval/reranker order and caps passages to max_chunks (default 4)
-    to prevent prompt context dilution.
-    Returns tuple of (formatted_context_str, top_candidate_chunks_list).
-    """
-    if not chunks:
-        return "", []
+def _select_top_candidates(chunks: List[Dict], max_chunks: int = 4) -> List[Dict]:
+    """Take the top max_chunks from an already-ranked candidate list --
+    this is the candidate POOL, not the final presentation order (a later
+    step, the LLM relevance judge, reorders it; _render_context then trusts
+    that order without re-sorting -- see its docstring for why re-sorting
+    downstream is a confirmed bug in its own right).
 
-    top_candidates = sorted(
-        chunks,
-        key=lambda c: (
-            c.get("concept_matched", False),
-            c.get("has_period_match", False),
-            c.get("has_numeric_value", False),
-            c.get("content_evidence_score", 0.0),
-            c.get("rerank_score", 0.0),
-        ),
-        reverse=True,
-    )[:max_chunks]
+    A plain slice, not a re-sort. It used to re-sort by
+    (concept_matched, has_period_match, has_numeric_value,
+    content_evidence_score, rerank_score) -- a second, independent, and
+    CRUDER ranking than the one `chunks` already arrives in. chunks comes
+    straight from hybrid_search(), whose own ranking already folds in
+    cross-encoder scoring on top of everything in that tuple; re-deriving
+    priority from a subset of the same fields, with content_evidence_score
+    outweighing the cross-encoder-informed rerank_score in the sort order,
+    could silently drop a chunk hybrid_search had ranked inside the
+    candidate pool. Confirmed against a real miss: hybrid_search correctly
+    placed a segment-breakdown table at position 11 of a 12-chunk pool
+    (after a targeted rerank fix), but this re-sort dropped it back out
+    before it ever reached the LLM -- evaluate_retrieval_status's
+    equivalent selection (`chunks[:validation_limit]`) already used a
+    plain slice and never had this problem."""
+    if not chunks:
+        return []
+    return chunks[:max_chunks]
+
+
+def _render_context(top_candidates: List[Dict]) -> str:
+    """Format already-ordered candidate passages for LLM generation. Pure
+    rendering -- does NOT re-sort, so whatever order top_candidates arrives
+    in (heuristic pool selection, then LLM-relevance-judge reordering) is
+    exactly what the model sees, including which passage gets tagged
+    PRIMARY ANSWER-BEARING EVIDENCE."""
+    if not top_candidates:
+        return ""
 
     parts = []
     for i, c in enumerate(top_candidates, start=1):
@@ -314,9 +608,11 @@ def _format_context(chunks: List[Dict], max_chunks: int = 4) -> tuple:
         tag = "PRIMARY ANSWER-BEARING EVIDENCE" if i == 1 else "SUPPORTING CONTEXT"
         section = c.get("section") or ""
         subsection = c.get("subsection") or ""
+        statement_title = c.get("statement_title") or ""
         statement_type = c.get("statement_type") or ""
         chunk_type = c.get("chunk_type") or ""
         table_title = c.get("table_title") or ""
+        table_context = c.get("table_context") or ""
         units = c.get("units") or ""
 
         meta_parts = [tag, f"DOCUMENT: {doc_name}"]
@@ -330,12 +626,16 @@ def _format_context(chunks: List[Dict], max_chunks: int = 4) -> tuple:
             meta_parts.append(f"SECTION: {section}")
         if subsection:
             meta_parts.append(f"SUBSECTION: {subsection}")
+        if statement_title:
+            meta_parts.append(f"STATEMENT_TITLE: {statement_title}")
         if statement_type:
             meta_parts.append(f"STATEMENT: {statement_type}")
         if chunk_type:
             meta_parts.append(f"TYPE: {chunk_type}")
         if table_title:
             meta_parts.append(f"TABLE: {table_title}")
+        if table_context:
+            meta_parts.append(f"TABLE_CONTEXT: {table_context}")
         if units:
             meta_parts.append(f"UNIT: {units}")
         meta_parts.append(f"PAGE: {page}")
@@ -346,7 +646,7 @@ def _format_context(chunks: List[Dict], max_chunks: int = 4) -> tuple:
             text = text[:MAX_PASSAGE_CHARS] + " ...[truncated]"
         parts.append(f"[Passage {i} | {meta_header}]\n{text}")
 
-    return "\n\n".join(parts), top_candidates
+    return "\n\n".join(parts)
 
 
 def _parse_groq_duration(s: str) -> Optional[float]:
@@ -417,17 +717,36 @@ def _comparison_grouping_terms(query: str, query_info) -> List[str]:
     return [t for t in _validation_tokens(query) if t not in metric_tokens]
 
 
+# "Which segment/product/region ... has/drove/dragged down ..." names a
+# candidate-set noun without the superlative wording ("highest", "which of")
+# the plain substring markers below catch -- it still asks the model to pick
+# ONE answer out of several named entities, which needs the same
+# wider/multi-entity retrieval a comparison gets, not the narrower default.
+# Confirmed against a real miss: retrieval for "which segment has dragged
+# down 3M's growth" surfaced only the top-matching segment (Health Care) and
+# never the correct one (Consumer), because this phrasing wasn't recognized
+# as a comparison across segments at all.
+_WHICH_ENTITY_RE = re.compile(r"\bwhich\s+(segment|product|business|division|region|unit|category|line|subsidiary|market)\b")
+
+
 def _is_comparison_query(query: str, query_info) -> bool:
     q = f" {(query or '').lower()} "
     markers = ("highest", "lowest", "largest", "smallest", "greatest", "least", "rank", "which of", "compare", " versus ", " vs ")
-    return bool(getattr(query_info, "is_comparison", False) or getattr(query_info, "query_type", "") in ("COMPARISON", "TREND") or any(m in q for m in markers))
+    return bool(
+        getattr(query_info, "is_comparison", False)
+        or getattr(query_info, "query_type", "") in ("COMPARISON", "TREND")
+        or any(m in q for m in markers)
+        or _WHICH_ENTITY_RE.search(q)
+    )
 
 
 def _chunk_search_text(c: Dict) -> str:
     return " ".join([
         c.get("section") or "",
         c.get("subsection") or "",
+        c.get("statement_title") or "",
         c.get("table_title") or "",
+        c.get("table_context") or "",
         c.get("statement_type") or "",
         c.get("chunk_type") or "",
         c.get("units") or "",
@@ -457,17 +776,23 @@ _DOCUMENT_PURPOSE_MARKERS = (
 )
 
 
-async def _call_groq(messages: List[Dict], max_retries: int = 4):
-    """POST to Groq chat completions with rate-limit-aware retry."""
-    if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY environment variable is not set")
+async def _call_openai_compatible(
+    url: str, api_key: str, model: str, missing_key_msg: str, messages: List[Dict], max_retries: int = 4
+):
+    """Shared POST logic for every OpenAI-Chat-Completions-shaped backend
+    this module talks to (Groq, Bedrock's OpenAI-compatible route,
+    Fireworks) -- same request shape, same bearer-token auth, same
+    rate-limit-aware retry. Provider-specific wrappers below just supply
+    the URL/key/model."""
+    if not api_key:
+        raise RuntimeError(missing_key_msg)
 
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": GROQ_MODEL,
+        "model": model,
         "messages": messages,
         "temperature": 0.0,
         "stream": False,
@@ -478,7 +803,7 @@ async def _call_groq(messages: List[Dict], max_retries: int = 4):
     for attempt in range(max_retries):
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(GROQ_API_URL, headers=headers, json=payload)
+                resp = await client.post(url, headers=headers, json=payload)
                 if resp.status_code == 429:
                     raise httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
                 resp.raise_for_status()
@@ -491,6 +816,373 @@ async def _call_groq(messages: List[Dict], max_retries: int = 4):
     raise last_exc
 
 
+async def _call_groq(messages: List[Dict], max_retries: int = 4):
+    return await _call_openai_compatible(
+        GROQ_API_URL, GROQ_API_KEY, GROQ_MODEL,
+        "GROQ_API_KEY environment variable is not set", messages, max_retries,
+    )
+
+
+async def _call_fireworks(messages: List[Dict], max_retries: int = 4):
+    return await _call_openai_compatible(
+        FIREWORKS_API_URL, FIREWORKS_API_KEY, FIREWORKS_MODEL,
+        "FIREWORKS_API_KEY environment variable is not set", messages, max_retries,
+    )
+
+
+# Cerebras's trial-credit tier caps at 5 requests/minute -- confirmed live
+# via the x-ratelimit-* response headers, and shared across every model on
+# the account (gpt-oss-120b and gemma-4-31b both reported the same 5/min,
+# 150/hour, 2400/day budget), so switching models doesn't raise it. A single
+# question here fires 2-3 LLM calls back to back (relevance-rerank ->
+# generation, then evaluate.py's own judge call on top) with no spacing
+# between them, which blows past 5/min almost immediately and burns retries
+# against the daily cap on 429s that were entirely avoidable. This throttle
+# makes every outbound Cerebras call -- regardless of caller -- wait its
+# turn instead, so the limit is respected proactively rather than recovered
+# from after the fact.
+_CEREBRAS_MIN_INTERVAL = 13.0  # seconds; 60/5 = 12s minimum, padded for clock/network slop
+_cerebras_rate_lock = asyncio.Lock()
+_cerebras_last_call_at = [0.0]
+
+
+async def _throttle_cerebras():
+    async with _cerebras_rate_lock:
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+        wait = _CEREBRAS_MIN_INTERVAL - (now - _cerebras_last_call_at[0])
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _cerebras_last_call_at[0] = loop.time()
+
+
+async def _call_cerebras(messages: List[Dict], max_retries: int = 4):
+    await _throttle_cerebras()
+    return await _call_openai_compatible(
+        CEREBRAS_API_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL,
+        "CEREBRAS_API_KEY environment variable is not set", messages, max_retries,
+    )
+
+
+_ANTHROPIC_CLIENT = None
+
+
+def _get_claude_client():
+    """Lazy singleton so importing this module doesn't require the
+    'anthropic' package unless LLM_PROVIDER=claude is actually selected."""
+    global _ANTHROPIC_CLIENT
+    if _ANTHROPIC_CLIENT is not None:
+        return _ANTHROPIC_CLIENT
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise RuntimeError(
+            "LLM_PROVIDER=claude requires the 'anthropic' package: pip install anthropic"
+        ) from exc
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
+    _ANTHROPIC_CLIENT = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    return _ANTHROPIC_CLIENT
+
+
+def _split_system(messages: List[Dict]):
+    """Claude takes 'system' as its own top-level request parameter, not a
+    message with role='system' the way the Groq/OpenAI-style payload does."""
+    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    claude_messages = [m for m in messages if m.get("role") != "system"]
+    return "\n\n".join(system_parts), claude_messages
+
+
+# adaptive thinking + output_config.effort only exist on this model tier;
+# older/simpler models (Haiku 4.5, Sonnet 4.5, ...) reject both with a 400.
+# Haiku 4.5 doesn't need either for a task this constrained (quote-and-cite,
+# no multi-step reasoning) -- it's the cheap/fast tier by design.
+_ADAPTIVE_THINKING_MODELS = frozenset({
+    "claude-fable-5", "claude-mythos-5",
+    "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+    "claude-sonnet-5", "claude-sonnet-4-6",
+})
+
+
+def _claude_extra_kwargs(model: str) -> Dict:
+    # Bedrock model IDs carry an "anthropic." prefix that isn't part of the
+    # bare model name the tier list below is keyed on.
+    bare_model = model.split("anthropic.", 1)[-1] if model.startswith("anthropic.") else model
+    if bare_model in _ADAPTIVE_THINKING_MODELS:
+        return {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
+    return {}
+
+
+async def _call_claude(messages: List[Dict], max_retries: int = 4):
+    """Call the Anthropic API and reshape the response into the same
+    {"choices": [{"message": {"content": ...}}]} shape _call_groq returns,
+    so _parse_llm_output and every caller stay provider-agnostic. The SDK
+    retries 429/5xx/connection errors internally, so no hand-rolled backoff
+    loop is needed here the way there is for the raw-httpx Groq call."""
+    client = _get_claude_client()
+    system_text, claude_messages = _split_system(messages)
+
+    response = await client.with_options(max_retries=max_retries).messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
+        system=system_text,
+        messages=claude_messages,
+        **_claude_extra_kwargs(CLAUDE_MODEL),
+    )
+    text = "".join(block.text for block in response.content if block.type == "text")
+    return {"choices": [{"message": {"content": text}}]}
+
+
+def _require_bedrock_config(provider_name: str, api_url: str):
+    if not AWS_BEARER_TOKEN_BEDROCK:
+        raise RuntimeError("AWS_BEARER_TOKEN_BEDROCK environment variable is not set")
+    if not api_url:
+        raise RuntimeError(
+            f"AWS_REGION environment variable is not set (required for LLM_PROVIDER={provider_name}; "
+            "there is no default region fallback)"
+        )
+
+
+async def _call_bedrock(messages: List[Dict], max_retries: int = 4):
+    """Call Claude via Amazon Bedrock's native Messages route, authenticated
+    with a Bedrock API key (x-api-key bearer token) rather than AWS SigV4 --
+    no boto3, no AWS access key pair, no IAM role. Same request/response
+    shape as the first-party Anthropic API (the route mirrors it directly),
+    so this parallels _call_claude but over raw httpx instead of the SDK,
+    and reshapes the response into the same {"choices": [...]} shape
+    _call_groq returns."""
+    _require_bedrock_config("bedrock", BEDROCK_MESSAGES_API_URL)
+    system_text, claude_messages = _split_system(messages)
+
+    headers = {
+        "x-api-key": AWS_BEARER_TOKEN_BEDROCK,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": BEDROCK_MODEL,
+        "max_tokens": 4096,
+        "system": system_text,
+        "messages": claude_messages,
+        "stream": False,
+        **_claude_extra_kwargs(BEDROCK_MODEL),
+    }
+
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(BEDROCK_MESSAGES_API_URL, headers=headers, json=payload)
+                if resp.status_code == 429:
+                    raise httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
+                resp.raise_for_status()
+                data = resp.json()
+                text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+                return {"choices": [{"message": {"content": text}}]}
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries - 1:
+                await asyncio.sleep(_retry_after_seconds(exc, attempt))
+            continue
+    raise last_exc
+
+
+async def _call_bedrock_openai(messages: List[Dict], max_retries: int = 4):
+    """POST to Bedrock's OpenAI-compatible chat completions endpoint -- same
+    request/response shape as Groq/Fireworks, different bearer token and a
+    region check up front."""
+    _require_bedrock_config("bedrock_openai", BEDROCK_OPENAI_API_URL)
+    return await _call_openai_compatible(
+        BEDROCK_OPENAI_API_URL, AWS_BEARER_TOKEN_BEDROCK, BEDROCK_OPENAI_MODEL,
+        "AWS_BEARER_TOKEN_BEDROCK environment variable is not set", messages, max_retries,
+    )
+
+
+async def _call_llm(messages: List[Dict], max_retries: int = 4):
+    """Dispatch to whichever backend LLM_PROVIDER selects."""
+    if LLM_PROVIDER == "claude":
+        return await _call_claude(messages, max_retries=max_retries)
+    if LLM_PROVIDER == "bedrock":
+        return await _call_bedrock(messages, max_retries=max_retries)
+    if LLM_PROVIDER == "bedrock_openai":
+        return await _call_bedrock_openai(messages, max_retries=max_retries)
+    if LLM_PROVIDER == "fireworks":
+        return await _call_fireworks(messages, max_retries=max_retries)
+    if LLM_PROVIDER == "cerebras":
+        return await _call_cerebras(messages, max_retries=max_retries)
+    return await _call_groq(messages, max_retries=max_retries)
+
+
+async def call_llm_raw(messages: List[Dict], max_retries: int = 4) -> str:
+    """Public entry point for callers outside this module (currently
+    scripts/evaluate.py's LLM-as-judge scorer) that just want a plain-text
+    completion through whichever LLM_PROVIDER is configured, without
+    reaching into _call_llm/the provider-specific response shape
+    themselves."""
+    data = await _call_llm(messages, max_retries=max_retries)
+    choices = data.get("choices") or []
+    return choices[0]["message"]["content"] if choices else ""
+
+
+async def _stream_openai_compatible_deltas(
+    url: str, api_key: str, model: str, missing_key_msg: str, messages: List[Dict]
+) -> AsyncGenerator[str, None]:
+    """Shared streaming logic for every OpenAI-Chat-Completions-shaped
+    backend. Raises (rather than retrying internally) on any failure --
+    stream_answer's outer retry loop owns retries, since a mid-stream
+    failure needs a fresh request anyway."""
+    if not api_key:
+        raise RuntimeError(missing_key_msg)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.0,
+        "stream": True,
+        "reasoning_effort": REASONING_EFFORT,
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream("POST", url, headers=headers, json=payload) as resp:
+            if resp.status_code == 429:
+                raise httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:"):].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                # "choices" can be present but empty -- e.g. a trailing
+                # usage-only frame some OpenAI-compatible hosts (Fireworks
+                # included) send before [DONE] -- so `.get("choices", [{}])`
+                # alone isn't enough; a present-but-empty list still needs
+                # the fallback.
+                choices = obj.get("choices") or [{}]
+                delta = choices[0].get("delta", {}).get("content", "")
+                if delta:
+                    yield delta
+
+
+def _stream_groq_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    return _stream_openai_compatible_deltas(
+        GROQ_API_URL, GROQ_API_KEY, GROQ_MODEL,
+        "GROQ_API_KEY environment variable is not set", messages,
+    )
+
+
+def _stream_fireworks_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    return _stream_openai_compatible_deltas(
+        FIREWORKS_API_URL, FIREWORKS_API_KEY, FIREWORKS_MODEL,
+        "FIREWORKS_API_KEY environment variable is not set", messages,
+    )
+
+
+async def _stream_cerebras_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    """Async generator (not a plain wrapper returning one, like its siblings)
+    so the rate throttle can be awaited before the request fires."""
+    await _throttle_cerebras()
+    async for delta in _stream_openai_compatible_deltas(
+        CEREBRAS_API_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL,
+        "CEREBRAS_API_KEY environment variable is not set", messages,
+    ):
+        yield delta
+
+
+async def _stream_claude_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    """Yield text deltas from a Claude streaming call."""
+    client = _get_claude_client()
+    system_text, claude_messages = _split_system(messages)
+    async with client.messages.stream(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
+        system=system_text,
+        messages=claude_messages,
+        **_claude_extra_kwargs(CLAUDE_MODEL),
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+
+
+async def _stream_bedrock_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    """Yield text deltas from Claude via Bedrock's native Messages route.
+    Parses Anthropic's own streaming SSE protocol by hand (content_block_delta
+    events carrying text_delta pieces) -- the same events the Anthropic SDK's
+    stream.text_stream parses internally, since this route mirrors the
+    first-party API directly."""
+    _require_bedrock_config("bedrock", BEDROCK_MESSAGES_API_URL)
+    system_text, claude_messages = _split_system(messages)
+
+    headers = {
+        "x-api-key": AWS_BEARER_TOKEN_BEDROCK,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": BEDROCK_MODEL,
+        "max_tokens": 4096,
+        "system": system_text,
+        "messages": claude_messages,
+        "stream": True,
+        **_claude_extra_kwargs(BEDROCK_MODEL),
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream("POST", BEDROCK_MESSAGES_API_URL, headers=headers, json=payload) as resp:
+            if resp.status_code == 429:
+                raise httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:"):].strip()
+                try:
+                    obj = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") == "content_block_delta":
+                    delta = obj.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            yield text
+
+
+def _stream_bedrock_openai_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    """Yield text deltas from Bedrock's OpenAI-compatible endpoint -- same
+    SSE shape as Groq/Fireworks, different bearer token. The region check
+    runs eagerly (not lazily inside the generator) so a missing AWS_REGION
+    surfaces before any request is attempted."""
+    _require_bedrock_config("bedrock_openai", BEDROCK_OPENAI_API_URL)
+    return _stream_openai_compatible_deltas(
+        BEDROCK_OPENAI_API_URL, AWS_BEARER_TOKEN_BEDROCK, BEDROCK_OPENAI_MODEL,
+        "AWS_BEARER_TOKEN_BEDROCK environment variable is not set", messages,
+    )
+
+
+def _stream_llm_deltas(messages: List[Dict]) -> AsyncGenerator[str, None]:
+    """Dispatch to whichever backend LLM_PROVIDER selects."""
+    if LLM_PROVIDER == "claude":
+        return _stream_claude_deltas(messages)
+    if LLM_PROVIDER == "bedrock_openai":
+        return _stream_bedrock_openai_deltas(messages)
+    if LLM_PROVIDER == "bedrock":
+        return _stream_bedrock_deltas(messages)
+    if LLM_PROVIDER == "fireworks":
+        return _stream_fireworks_deltas(messages)
+    if LLM_PROVIDER == "cerebras":
+        return _stream_cerebras_deltas(messages)
+    return _stream_groq_deltas(messages)
+
+
 _NOT_FOUND = {"found": False, "answer": None, "page_num": None, "evidence_text": None, "sources": []}
 
 
@@ -501,11 +1193,18 @@ def _safe_print(value=""):
     print(text.encode(encoding, errors="replace").decode(encoding, errors="replace"))
 
 
-def _parse_llm_output(text: str, top_chunk: Optional[Dict] = None, ret_status: str = "") -> Dict:
+def _parse_llm_output(text: str, top_chunks: Optional[List[Dict]] = None, ret_status: str = "") -> Dict:
     text = (text or "").strip()
+    top_chunk = top_chunks[0] if top_chunks else None
 
     # 1. Standard ANSWER: regex extraction
-    answer_match = re.search(r"ANSWER:\s*(.+?)(?:\nSOURCE:|\n\n|$)", text, re.IGNORECASE | re.DOTALL)
+    # Stops only at a "SOURCE:" line or end of string -- NOT at the first
+    # blank line. A blank-line stop truncates any answer the model formats
+    # with a paragraph break before a bulleted breakdown (e.g. "verdict +
+    # supporting ratios" style answers), silently dropping the actual
+    # figures needed to score the answer as correct even when the model got
+    # it right.
+    answer_match = re.search(r"ANSWER:\s*(.+?)(?:\nSOURCE:|$)", text, re.IGNORECASE | re.DOTALL)
     if answer_match:
         answer = answer_match.group(1).strip()
         if answer and answer.upper() != "NOT_FOUND":
@@ -522,6 +1221,31 @@ def _parse_llm_output(text: str, top_chunk: Optional[Dict] = None, ret_status: s
                         "page_num": int(pnum),
                         "evidence_text": quote.strip(),
                     })
+            # The prompt's own fallback format ("SOURCE: Passage [N] - ...")
+            # is meant for when a passage has no page number at all -- but
+            # the model sometimes uses it even when the passage DOES have
+            # one, citing the right passage by its list position instead of
+            # its page. Confirmed as a real miss: "SOURCE: Passage 5 - ..."
+            # correctly named the actual Cash Flow Statement passage, but
+            # the page-only regex above found nothing, and the result fell
+            # through to top_chunks[0]'s page -- an unrelated passage two
+            # ranks and eleven pages away. Resolve Passage N back to that
+            # passage's real page instead of losing the citation.
+            if not sources and top_chunks:
+                passage_matches = re.findall(
+                    r"SOURCE:\s*Passage\s*(\d+)\s*[-–—:]\s*[\"“”'']?(.+?)[\"“”'']?(?:\n|$)",
+                    text,
+                    re.IGNORECASE,
+                )
+                for pnum_str, quote in passage_matches:
+                    idx = int(pnum_str) - 1
+                    if 0 <= idx < len(top_chunks):
+                        c = top_chunks[idx]
+                        sources.append({
+                            "doc_name": c.get("doc_name"),
+                            "page_num": c.get("page_num", 1),
+                            "evidence_text": quote.strip(),
+                        })
             if not sources and top_chunk:
                 sources.append({
                     "doc_name": top_chunk.get("doc_name"),
@@ -561,7 +1285,6 @@ def _parse_llm_output(text: str, top_chunk: Optional[Dict] = None, ret_status: s
     return res
 
 
-from config import MIN_CONTENT_EVIDENCE_SCORE
 from numerical_reasoner import extract_evidence_notes
 from query_analyzer import analyze_query, ACCOUNTING_CONCEPTS, UNRELATED_TOPIC_KEYWORDS
 
@@ -700,6 +1423,185 @@ def evaluate_retrieval_status(chunks: List[Dict], query: str = "") -> tuple:
     return "SUFFICIENT_EVIDENCE", "All applicable rule-based evidence requirements passed."
 
 
+_RELEVANCE_JUDGE_PROMPT = """You are evaluating retrieved passages from SEC filings for their relevance to a financial question.
+
+Your task is to identify passages that contain evidence needed to answer the question accurately. Relevance means that a passage directly provides a requested fact, a required calculation input, a decision rule, or necessary supporting context.
+
+QUESTION:
+{question}
+
+PASSAGES:
+{passages}
+
+## Relevance criteria
+
+Evaluate each passage using all applicable criteria:
+
+1. Entity
+
+   * The passage must concern the requested company, subsidiary, segment, security, or other entity.
+   * A value for a different entity is not relevant unless the question explicitly requests a comparison.
+
+2. Metric
+
+   * The passage must contain the requested metric, a valid synonym, or an input needed to calculate it.
+   * Similar financial terms are not automatically interchangeable.
+   * For example, revenue is not necessarily net income, operating cash flow is not free cash flow, and gross PP&E is not net PP&E.
+
+3. Period
+
+   * The passage must correspond to the requested fiscal year, quarter, reporting date, or comparison period.
+   * A passage for another period should rank low unless it provides a required comparison value.
+
+4. Row, column, and unit
+
+   * For tables, verify the row label, column heading, period, currency, and unit.
+   * Do not treat a nearby number from another row or column as the requested value.
+
+5. Direct usefulness
+
+   * Rank evidence containing the exact requested value above general discussion of the same topic.
+   * Rank a primary financial statement or table above a vague narrative reference when both report the same information.
+
+## Multi-passage questions
+
+A question may require multiple values from different passages.
+
+For example, calculating CAPEX divided by revenue may require:
+
+* CAPEX from a cash-flow statement or capital-expenditure disclosure
+* Revenue from an income statement
+
+A passage should be considered directly relevant if it provides any necessary calculation input, even if it cannot independently answer the entire question.
+
+Analytical questions may require several metrics. For example, assessing capital intensity may require CAPEX, revenue, PP&E, total assets, net income, or a stated decision rule. Do not reject a passage merely because it provides only one of the required inputs.
+
+## Evidence priority
+
+When passages are otherwise equally relevant, prefer:
+
+1. Audited financial statements and financial tables
+2. Direct filing disclosures
+3. Accounting-policy or footnote disclosures
+4. Management discussion explicitly reporting the requested fact
+5. Other necessary supporting context
+
+## Irrelevant or weak evidence
+
+Rank a passage low or exclude it when it:
+
+* merely shares vocabulary with the question
+* concerns the wrong company, segment, security, or period
+* contains the requested number in the wrong row or column
+* mentions a metric without reporting the value or necessary context
+* is only a table of contents
+* is an Exhibit Index or list of exhibit filenames
+* contains an exhibit title but not the contents of the exhibit
+* provides general business commentary that does not support the requested conclusion
+* duplicates stronger evidence without adding useful information
+
+## Output
+
+Return only valid JSON in this format:
+
+{
+"ranked_passages": [
+{
+"passage_number": 1,
+"relevance": "high",
+"reason": "Provides FY2022 capital expenditures used in the required calculation."
+},
+{
+"passage_number": 4,
+"relevance": "medium",
+"reason": "Provides supporting context but not the primary requested value."
+}
+]
+}
+
+Requirements:
+
+* Order passages from most relevant to least relevant.
+* Use only "high", "medium", or "low" for relevance.
+* Include only passages with some meaningful relevance.
+* Do not answer the financial question.
+* Do not calculate the final answer.
+* Do not use information outside the supplied passages.
+  """
+
+
+
+async def _llm_relevance_rerank(question: str, chunks: List[Dict]) -> List[Dict]:
+    """Mandatory relevance-judging pass over the already-retrieved
+    candidates (BM25/FAISS/cross-encoder have already run by the time
+    chunks reaches this point) -- an extra LLM call that asks "does this
+    passage actually answer the question, not just share its vocabulary."
+    Always runs; there is no flag to skip it. Confirmed against a real
+    miss: an exhibit-index table ranked #1 by the existing lexical/semantic
+    scorers purely because it mentioned "securities" and "exhibit," and the
+    model then misread an exhibit filename as evidence of what it names
+    (see the AMEX debt-securities case) -- a relevance judge that reasons
+    about what a passage actually contains, not just what it mentions, is
+    positioned to catch that a lexical reranker structurally cannot.
+
+    Not making this optional means it always executes, not that it may
+    never fail: on any call/parse failure it falls back to the untouched
+    input order rather than raising, since a broken judge call must never
+    take down answer generation.
+    """
+    if not chunks or len(chunks) < 2:
+        return chunks
+
+    passage_lines = []
+    for i, c in enumerate(chunks, start=1):
+        # 300 chars was confirmed too short to be useful: a real segment-
+        # comparison passage's only discriminating figure (the specific
+        # organic-growth percentage) sat past that cutoff, so the judge saw
+        # two segments' passages as equally generic "segment performance"
+        # text and declined to reorder them at all. 700 costs more per call
+        # but stays well under the ~1400-char full passages sent to the
+        # actual answer-generation step.
+        text = (c.get("text") or "")[:700]
+        label_parts = [f"[{i}]"]
+        if c.get("table_title"):
+            label_parts.append(f"TABLE: {c['table_title']}")
+        if c.get("section"):
+            label_parts.append(f"SECTION: {c['section'][:60]}")
+        passage_lines.append(f"{' | '.join(label_parts)}\n{text}")
+    passages_block = "\n\n".join(passage_lines)
+
+    # Plain .replace(), not .format() -- the prompt's JSON output example
+    # below (a literal {"ranked_passages": [...]}) contains unescaped
+    # braces that .format() parses as placeholders and crashes on
+    # (KeyError: '\n"ranked_passages"'). This substitutes only the two
+    # named slots and is immune to any braces elsewhere in the prompt.
+    prompt_text = _RELEVANCE_JUDGE_PROMPT.replace("{question}", question).replace("{passages}", passages_block)
+    messages = [{"role": "user", "content": prompt_text}]
+
+    try:
+        data = await _call_llm(messages, max_retries=2)
+        choices = data.get("choices") or []
+        content = choices[0]["message"]["content"] if choices else ""
+        order = [int(n) for n in re.findall(r"\d+", content or "")]
+        seen = set()
+        ranked = []
+        for n in order:
+            if 1 <= n <= len(chunks) and n not in seen:
+                seen.add(n)
+                ranked.append(chunks[n - 1])
+        # Anything the judge's output didn't mention (truncated response,
+        # skipped a number) still needs to reach context -- append it in
+        # its original position rather than silently dropping it.
+        for i, c in enumerate(chunks, start=1):
+            if i not in seen:
+                ranked.append(c)
+        print(f"[LLM RELEVANCE JUDGE] reordered {len(chunks)} passages: {order}")
+        return ranked
+    except Exception as exc:
+        print(f"[LLM RELEVANCE JUDGE] call failed, keeping original order: {exc}")
+        return chunks
+
+
 async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> AnswerResult:
     ret_status, ret_reason = evaluate_retrieval_status(chunks, query=question)
     print(f"RETRIEVAL_STATUS: {ret_status} ({ret_reason})")
@@ -719,7 +1621,9 @@ async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> A
         )
 
     query_info = analyze_query(question)
-    context, top_chunks = _format_context(chunks, max_chunks=_context_chunk_limit(query_info))
+    top_chunks = _select_top_candidates(chunks, max_chunks=_context_chunk_limit(query_info))
+    top_chunks = await _llm_relevance_rerank(question, top_chunks)
+    context = _render_context(top_chunks)
     if not top_chunks or not context.strip():
         return AnswerResult(
             found=False,
@@ -770,6 +1674,9 @@ async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> A
                 "doc_name": c.get("doc_name"),
                 "section": c.get("section"),
                 "subsection": c.get("subsection"),
+                "statement_title": c.get("statement_title"),
+                "table_title": c.get("table_title"),
+                "table_context": c.get("table_context"),
                 "page_num": c.get("page_num"),
                 "statement_type": c.get("statement_type"),
                 "chunk_type": c.get("chunk_type"),
@@ -785,11 +1692,14 @@ async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> A
     }
 
     try:
-        data = await _call_groq(messages)
-        content = data["choices"][0]["message"]["content"]
+        data = await _call_llm(messages)
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError(f"LLM response had no choices: {data}")
+        content = choices[0]["message"]["content"]
 
         print("\n==================================================")
-        print("[RAW GROQ OUTPUT]")
+        print(f"[RAW {LLM_PROVIDER.upper()} OUTPUT]")
         print(f"Response Length: {len(content)}")
         print(f"Contains 'ANSWER:': {'ANSWER:' in content.upper()}")
         print(f"Contains 'NOT_FOUND': {'NOT_FOUND' in content.upper()}")
@@ -797,9 +1707,9 @@ async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> A
         print("--------------------------------------------------")
         _safe_print(content)
         print("--------------------------------------------------")
-        print("[END RAW GROQ OUTPUT]")
+        print(f"[END RAW {LLM_PROVIDER.upper()} OUTPUT]")
         print("==================================================\n")
-        parsed = _parse_llm_output(content, top_chunk=top_chunks[0] if top_chunks else None, ret_status=ret_status)
+        parsed = _parse_llm_output(content, top_chunks=top_chunks, ret_status=ret_status)
         parsed["raw_response"] = content
         parsed["confidence"] = _confidence_from_best_passage(top_chunks) if parsed["found"] else 0.0
         parsed["debug_info"] = debug_info
@@ -808,7 +1718,7 @@ async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> A
         return AnswerResult(
             found=False,
             confidence=0.0,
-            error=f"Groq API error: {exc}",
+            error=f"{LLM_PROVIDER} API error: {exc}",
             debug_info=debug_info,
             parser_decision="LLM error; abstained",
             fallback_triggered=False,
@@ -839,7 +1749,9 @@ async def stream_answer(question: str, doc_name: str, chunks: List[Dict]) -> Asy
         return
 
     query_info = analyze_query(question)
-    context, top_chunks = _format_context(chunks, max_chunks=_context_chunk_limit(query_info))
+    top_chunks = _select_top_candidates(chunks, max_chunks=_context_chunk_limit(query_info))
+    top_chunks = await _llm_relevance_rerank(question, top_chunks)
+    context = _render_context(top_chunks)
     if not top_chunks or not context.strip():
         yield {
             "type": "result",
@@ -895,6 +1807,9 @@ async def stream_answer(question: str, doc_name: str, chunks: List[Dict]) -> Asy
                 "doc_name": c.get("doc_name"),
                 "section": c.get("section"),
                 "subsection": c.get("subsection"),
+                "statement_title": c.get("statement_title"),
+                "table_title": c.get("table_title"),
+                "table_context": c.get("table_context"),
                 "page_num": c.get("page_num"),
                 "statement_type": c.get("statement_type"),
                 "chunk_type": c.get("chunk_type"),
@@ -914,42 +1829,11 @@ async def stream_answer(question: str, doc_name: str, chunks: List[Dict]) -> Asy
 
     for attempt in range(max_retries):
         try:
-            if not GROQ_API_KEY:
-                raise RuntimeError("GROQ_API_KEY environment variable is not set")
-
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": GROQ_MODEL,
-                "messages": messages,
-                "temperature": 0.0,
-                "stream": True,
-                "reasoning_effort": REASONING_EFFORT,
-            }
-
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                async with client.stream("POST", GROQ_API_URL, headers=headers, json=payload) as resp:
-                    if resp.status_code == 429:
-                        raise httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data_str = line[len("data:"):].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            obj = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue
-                        delta = obj.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if delta:
-                            full_text += delta
-                            yield {"type": "delta", "content": delta}
+            async for delta in _stream_llm_deltas(messages):
+                full_text += delta
+                yield {"type": "delta", "content": delta}
             print("\n==================================================")
-            print("[RAW GROQ OUTPUT]")
+            print(f"[RAW {LLM_PROVIDER.upper()} OUTPUT]")
             print(f"Response Length: {len(full_text)}")
             print(f"Contains 'ANSWER:': {'ANSWER:' in full_text.upper()}")
             print(f"Contains 'NOT_FOUND': {'NOT_FOUND' in full_text.upper()}")
@@ -957,7 +1841,7 @@ async def stream_answer(question: str, doc_name: str, chunks: List[Dict]) -> Asy
             print("--------------------------------------------------")
             _safe_print(full_text)
             print("--------------------------------------------------")
-            print("[END RAW GROQ OUTPUT]")
+            print(f"[END RAW {LLM_PROVIDER.upper()} OUTPUT]")
             print("==================================================\n")
             break
         except Exception as exc:
@@ -969,7 +1853,7 @@ async def stream_answer(question: str, doc_name: str, chunks: List[Dict]) -> Asy
                    "evidence_text": None, "confidence": 0.0, "sources": [], "error": f"llm_error: {exc}", "debug_info": debug_info}
             return
 
-    parsed = _parse_llm_output(full_text, top_chunk=top_chunks[0] if top_chunks else None, ret_status=ret_status)
+    parsed = _parse_llm_output(full_text, top_chunks=top_chunks, ret_status=ret_status)
     confidence = _confidence_from_best_passage(top_chunks) if parsed["found"] else 0.0
     debug_info["verification_result"] = "found" if parsed["found"] else "not_found"
 

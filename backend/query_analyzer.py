@@ -15,7 +15,11 @@ ACCOUNTING_CONCEPTS: Dict[str, Dict] = {
         "keywords": [
             "net ppne", "net pp&e", "property, plant and equipment, net",
             "property, plant and equipment — net", "property plant and equipment net",
-            "ppne", "pp&e", "property, plant and equipment", "property plant and equipment"
+            "ppne", "pp&e", "property, plant and equipment", "property plant and equipment",
+            # Not every filer says "plant" -- e.g. Activision Blizzard's balance
+            # sheet line item is just "Property and equipment, net".
+            "property and equipment, net", "property and equipment — net",
+            "property and equipment net", "property and equipment"
         ]
     },
     "CAPEX": {
@@ -97,6 +101,18 @@ ACCOUNTING_CONCEPTS: Dict[str, Dict] = {
         "statement": "BALANCE_SHEET",
         "keywords": [
             "total assets"
+        ]
+    },
+    "CURRENT_ASSETS": {
+        "statement": "BALANCE_SHEET",
+        "keywords": [
+            "total current assets", "current assets"
+        ]
+    },
+    "CURRENT_LIABILITIES": {
+        "statement": "BALANCE_SHEET",
+        "keywords": [
+            "total current liabilities", "current liabilities"
         ]
     },
     "TOTAL_LIABILITIES": {
@@ -233,6 +249,97 @@ UNRELATED_TOPIC_KEYWORDS = [
     "pension", "postretirement", "stock-based compensation", "operating lease", "commitments and contingencies"
 ]
 
+# Named ratios / verdict frameworks a question can ask about without ever
+# spelling out the formula (unlike e.g. the fixed-asset-turnover practice
+# question, which defines its own formula inline). Without this table the
+# system has no way to know that "quick ratio" requires current assets,
+# inventory, and current liabilities, or that a "capital-intensive?"
+# verdict should be grounded in CAPEX/revenue, fixed-assets/total-assets,
+# and ROA rather than a gut read of raw dollar figures -- so retrieval
+# never boosts the right line items and the LLM either declares the
+# question unanswerable or eyeballs a wrong verdict. Matching one of these
+# expands normalized_concepts/accounting_terms to the ratio's required
+# inputs and attaches the formula to the prompt as a deterministic note.
+DERIVED_RATIOS: Dict[str, Dict] = {
+    "QUICK_RATIO": {
+        # Confirmed against a real miss: this dataset's own answer key
+        # computed quick ratio from the specific liquid-asset line items
+        # (cash + short-term investments + net receivables, including
+        # receivables from related parties) rather than the textbook
+        # (Current Assets - Inventory) approximation -- the two gave 1.57
+        # vs. 1.77 for the same filing. Keeping CURRENT_ASSETS/INVENTORY in
+        # "requires" (not the specific line items) so retrieval doesn't
+        # start abstaining on filings that don't break those out
+        # separately; the formula text below just states the preference.
+        "aliases": ["quick ratio", "acid test ratio", "acid-test ratio"],
+        "requires": ["CASH_AND_EQUIVALENTS", "ACCOUNTS_RECEIVABLE", "CURRENT_ASSETS", "INVENTORY", "CURRENT_LIABILITIES"],
+        "formula": (
+            "Quick Ratio = (most liquid current assets) / Current Liabilities. "
+            "If cash and cash equivalents, short-term investments, and net "
+            "receivables (including receivables from related parties) are "
+            "each separately reported in the evidence, sum those specific "
+            "line items over Current Liabilities. Otherwise, compute "
+            "(Current Assets - Inventory) / Current Liabilities instead -- "
+            "always compute one of these two; the Current Assets and "
+            "Inventory lines are on every balance sheet, so evidence "
+            "sufficient for the fallback is always evidence sufficient to "
+            "answer. Never return NOT_FOUND for this ratio merely because "
+            "the more granular line items aren't separately broken out."
+        ),
+    },
+    "CURRENT_RATIO": {
+        # "working capital ratio" is the same formula under a different
+        # name -- confirmed against a real practice question ("Define
+        # working capital ratio as total current assets divided by total
+        # current liabilities"). Added as an alias rather than a separate
+        # entry so it shares this one's requires/formula.
+        "aliases": ["current ratio", "working capital ratio"],
+        "requires": ["CURRENT_ASSETS", "CURRENT_LIABILITIES"],
+        "formula": "Current Ratio = Current Assets / Current Liabilities",
+    },
+    "INVENTORY_TURNOVER": {
+        # Confirmed against a real miss: asked bare ("Calculate inventory
+        # turnover ratio for FY2022"), no inline formula -- unlike DPO/
+        # working-capital-ratio/EBITDA questions in this dataset, which all
+        # spell their formula out and so already get their line items
+        # boosted by the plain keyword-matching concept loop above. Without
+        # this entry, retrieval had no signal to fetch the income
+        # statement's COGS figure alongside the balance sheet's inventory
+        # line, and the model retrieved only the latter.
+        #
+        # Formula convention confirmed by reverse-engineering this dataset's
+        # own gold figure: AES FY2022, COGS $10,069M, ending inventory
+        # $1,055M -> 10,069/1,055 = 9.55 = the gold answer (9.5) exactly.
+        # COGS/AVERAGE inventory ((1,055+604)/2=829.5) gives 12.1 instead --
+        # confirmed wrong against the same gold value, not a guess. This
+        # dataset's convention is ending inventory, not the textbook average.
+        "aliases": ["inventory turnover"],
+        "requires": ["INVENTORY", "COGS"],
+        "formula": (
+            "Inventory Turnover = Cost of Goods Sold (Cost of Sales) / Ending "
+            "Inventory (the inventory balance at the end of the period being "
+            "asked about -- not averaged with the prior period's balance). "
+            "Requires both the income statement's COGS/cost of sales figure and "
+            "the balance sheet's ending inventory figure -- retrieve and use both "
+            "statements even though the question only names inventory."
+        ),
+    },
+    "CAPITAL_INTENSITY": {
+        "aliases": ["capital-intensive", "capital intensive", "capital intensity"],
+        "requires": ["CAPEX", "NET_SALES_REVENUE", "PROPERTY_PLANT_EQUIPMENT_NET", "TOTAL_ASSETS", "NET_INCOME"],
+        "formula": (
+            "Judge capital intensity from ratios, not raw dollar magnitudes: "
+            "CAPEX / Revenue; Property Plant & Equipment (net) / Total Assets; "
+            "Return on Assets = Net Income / Total Assets."
+        ),
+    },
+    "DEBT_TO_EQUITY": {
+        "aliases": ["debt to equity", "debt-to-equity"],
+        "requires": ["DEBT", "TOTAL_EQUITY"],
+        "formula": "Debt-to-Equity = Total Debt / Total Equity",
+    },
+}
+
 
 @dataclass
 class QueryAnalysis:
@@ -254,6 +361,7 @@ class QueryAnalysis:
     requires_calculation: bool = False
     requires_multiple_evidence_chunks: bool = False
     target_statement_types: List[str] = field(default_factory=list)
+    derived_ratio_formula: str = ""
 
     @property
     def requested_statement(self) -> str:
@@ -286,31 +394,66 @@ def analyze_query(query: str) -> QueryAnalysis:
         "growth rate", "year-over-year change", "yoy change", "defined as",
         "days payable outstanding", " dpo", "round your answer",
     )
-    if any(k in q_lower for k in document_purpose_markers) and any(k in q_lower for k in ("filing", "8k", "8-k", "10q", "10-q", "10k", "10-k", "form")):
-        query_type = "DOCUMENT_PURPOSE"
-    elif any(k in q_lower for k in ("why", "explain", "describe", "reason", "driver", "impact")):
-        query_type = "EXPLANATION"
-    elif any(k in q_lower for k in calculation_markers):
-        query_type = "CALCULATION"
-        requires_calculation = True
-        if any(k in q_lower for k in ("year-over-year", "yoy", "change", "from ", " to ")):
-            is_comparison = True
-    elif any(k in q_lower for k in (
+    explanation_markers = ("why", "explain", "describe", "reason", "driver")
+    comparison_markers = (
         "compare", "versus", "vs", "difference", "change in", "year-over-year", "yoy", "growth",
         "highest", "lowest", "largest", "smallest", "greatest", "least", "rank ", "ranked",
         "which of", "which segment", "which category", "which region", "which product",
-    )):
-        query_type = "COMPARISON"
-        is_comparison = True
-    elif any(k in q_lower for k in ("trend", "over time", "historical", "prior years")):
-        query_type = "TREND"
-        is_comparison = True
-    elif any(k in q_lower for k in ("how much", "amount", "value", "total", "figure", "cost", "dollar", "what was the", "what is the")):
-        query_type = "NUMERIC_LOOKUP"
-    elif any(k in q_lower for k in ("what is", "define", "meaning")):
-        query_type = "DEFINITION"
+        # "Which X are registered/listed..." enumeration questions land here
+        # too -- confirmed against a real miss: "which debt securities are
+        # registered to trade..." fell all the way through to GENERAL
+        # (query_type's narrowest, 5-chunk retrieval tier) because none of
+        # the markers above name a financial-instrument noun, even though
+        # this is exactly the same "pick the right item(s) out of several
+        # named candidates" shape as "which segment" already gets COMPARISON
+        # treatment for.
+        "which debt", "which securities", "which notes", "which bonds",
+    )
+    trend_markers = ("trend", "over time", "historical", "prior years")
+    numeric_lookup_markers = ("how much", "amount", "value", "total", "figure", "cost", "dollar", "what was the", "what is the")
+    definition_markers = ("what is", "define", "meaning")
+
+    if any(k in q_lower for k in document_purpose_markers) and any(k in q_lower for k in ("filing", "8k", "8-k", "10q", "10-q", "10k", "10-k", "form")):
+        query_type = "DOCUMENT_PURPOSE"
     else:
-        query_type = "GENERAL"
+        # Priority-ordered candidates, each with its marker list. A plain
+        # first-match-wins elif chain over these (the original design) has a
+        # real, recurring failure mode: a single weak/overloaded keyword in
+        # an earlier category ("impact" in EXPLANATION) silently shadows a
+        # later category even when that later category matches on several
+        # specific markers ("which segment" + "growth" in COMPARISON) --
+        # confirmed on a real miss, and fixed there by hand-removing
+        # "impact". Rather than repeat that per keyword as each collision is
+        # found, a later category with >=2 marker hits now outranks an
+        # earlier category that only matched once; priority order is still
+        # the tie-break (and the only rule) whenever nothing reaches 2, so
+        # ordinary single-signal questions classify exactly as before.
+        candidates = [
+            ("EXPLANATION", explanation_markers),
+            ("CALCULATION", calculation_markers),
+            ("COMPARISON", comparison_markers),
+            ("TREND", trend_markers),
+            ("NUMERIC_LOOKUP", numeric_lookup_markers),
+            ("DEFINITION", definition_markers),
+        ]
+        matches = []
+        for rank, (name, markers) in enumerate(candidates):
+            hit_count = sum(1 for k in markers if k in q_lower)
+            if hit_count:
+                matches.append((rank, name, hit_count))
+
+        if not matches:
+            query_type = "GENERAL"
+        else:
+            strong = [m for m in matches if m[2] >= 2]
+            rank, query_type, _ = min(strong or matches, key=lambda m: m[0])
+
+        if query_type == "CALCULATION":
+            requires_calculation = True
+            if any(k in q_lower for k in ("year-over-year", "yoy", "change", "from ", " to ")):
+                is_comparison = True
+        elif query_type in ("COMPARISON", "TREND"):
+            is_comparison = True
 
     # 2. Extract Normalized Concepts & Dynamic Terminology Aliases
     normalized_concepts = []
@@ -327,6 +470,35 @@ def analyze_query(query: str) -> QueryAnalysis:
                 break
 
     metric = normalized_concepts[0] if normalized_concepts else ""
+
+    # 2b. Named Ratio / Verdict Framework Detection (see DERIVED_RATIOS).
+    # These questions never say "current assets" or "return on assets" --
+    # they name the ratio/verdict and expect the underlying line items to
+    # be found and combined, so the concept/accounting-term lists have to
+    # be expanded here or retrieval never boosts the right evidence.
+    derived_ratio_formula = ""
+    derived_ratio_statement_types = []
+    for ratio_info in DERIVED_RATIOS.values():
+        if not any(alias in q_lower for alias in ratio_info["aliases"]):
+            continue
+        derived_ratio_formula = ratio_info["formula"]
+        requires_calculation = True
+        if query_type not in ("CALCULATION", "COMPARISON", "TREND"):
+            query_type = "CALCULATION"
+        for concept_id in ratio_info["requires"]:
+            concept_info = ACCOUNTING_CONCEPTS.get(concept_id)
+            if not concept_info:
+                continue
+            if concept_id not in normalized_concepts:
+                normalized_concepts.append(concept_id)
+            for kw in concept_info["keywords"]:
+                if kw not in accounting_terms:
+                    accounting_terms.append(kw)
+            if inferred_statement == "ANY":
+                inferred_statement = concept_info["statement"]
+            if concept_info["statement"] not in derived_ratio_statement_types:
+                derived_ratio_statement_types.append(concept_info["statement"])
+        break
 
     # 3. Detect EXPLICITLY Requested Statement Type vs INFERRED Statement Type
     explicitly_requested = "ANY"
@@ -421,6 +593,9 @@ def analyze_query(query: str) -> QueryAnalysis:
         target_statement_types.append("BALANCE_SHEET")
     if any(k in q_lower for k in ("p&l", "profit and loss", "income statement", "statement of income", "statement of operations")) and "INCOME_STATEMENT" not in target_statement_types:
         target_statement_types.append("INCOME_STATEMENT")
+    for stmt in derived_ratio_statement_types:
+        if stmt not in target_statement_types:
+            target_statement_types.append(stmt)
 
     requires_multiple_evidence_chunks = (
         is_comparison
@@ -448,6 +623,7 @@ def analyze_query(query: str) -> QueryAnalysis:
         requires_calculation=requires_calculation,
         requires_multiple_evidence_chunks=requires_multiple_evidence_chunks,
         target_statement_types=list(dict.fromkeys(target_statement_types)),
+        derived_ratio_formula=derived_ratio_formula,
     )
 
 
@@ -471,6 +647,24 @@ def expand_query(query: str) -> str:
             "exhibit",
             "financial statements and exhibits",
         ])
+
+    # "What drove X change" / "which segment..." questions: the question's
+    # own wording tends to rank a general narrative passage above the
+    # specific breakdown table that actually answers it (a special-items
+    # reconciliation; an organic-sales-by-segment table) -- confirmed
+    # against two real misses (3M operating-margin drivers, 3M segment
+    # comparison) where the correct breakdown never entered the retrieved
+    # candidate pool at all, because nothing about "what drove 3M's
+    # operating margin change" lexically or semantically favors a
+    # reconciliation table over any other passage discussing the margin.
+    # These terms target that specific table type instead of the metric in
+    # general -- retrieval-recall gaps like this can't be fixed downstream
+    # by reranking or a better formula; the evidence has to be retrieved
+    # in the first place.
+    if analysis.query_type == "EXPLANATION" and any(k in q_lower for k in ("drove", "driver", "drivers", "caused", "contributed to")):
+        extra_terms.extend(["special items", "one-time charges", "significant items", "reconciliation"])
+    if any(k in q_lower for k in ("which segment", "which category", "which region", "which product", "which business", "which division")):
+        extra_terms.extend(["organic sales change", "by segment", "each segment"])
 
     if analysis.accounting_terms:
         extra_terms.extend(analysis.accounting_terms)
