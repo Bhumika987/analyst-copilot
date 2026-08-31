@@ -497,6 +497,25 @@ def deterministic_rerank(query: str, candidates: List[Dict], query_info: Optiona
         if c.get("bm25_rank") is not None and c.get("semantic_rank") is not None:
             agreement_boost = DUAL_AGREEMENT_BOOST
             content_evidence_score += agreement_boost
+        elif c.get("chunk_type") == "table" and c.get("bm25_rank") is not None and c.get("bm25_rank") <= 10:
+            # Dense numeric tables ("Consumer | (0.9) | ...") systematically
+            # embed as semantically dissimilar from a natural-language
+            # question, even when they ARE the exact right evidence --
+            # confirmed against a real miss where a segment-breakdown table
+            # ranked #9 in BM25 (clearly lexically relevant, and the actual
+            # answer-bearing chunk) never entered FAISS's top 50 at all,
+            # purely because it's mostly numbers with almost no narrative
+            # English to embed -- not because it's actually unrelated to
+            # the question. That meant it lost the full +20 agreement bonus
+            # a narrative chunk with identical BM25/table/query-term scores
+            # got, on a signal (semantic similarity) that structurally
+            # can't represent this kind of evidence well in the first
+            # place. Partial (not full) compensation, and only for chunks
+            # BM25 already independently ranks as strong -- this corrects a
+            # specific, identified blind spot in one of the two aggregated
+            # retrieval signals, not a general table preference.
+            agreement_boost = DUAL_AGREEMENT_BOOST * 0.75
+            content_evidence_score += agreement_boost
 
         # 6. Explicit vs Inferred Statement Supporting Boosts
         if query_info.explicitly_requested_statement != "ANY":

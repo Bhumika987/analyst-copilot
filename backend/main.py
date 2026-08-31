@@ -38,7 +38,11 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     question: str
     doc_name: Optional[str] = "all"
-    top_k: int = 8
+    # Widened alongside llm.py's _context_chunk_limit ceiling (8 -> 10 for
+    # comparison/calculation questions) -- retrieval has to hand over a pool
+    # wider than that ceiling for it to mean anything; narrowing here would
+    # silently make that widening a no-op.
+    top_k: int = 12
 
 
 def _sse(event: dict) -> str:
@@ -156,6 +160,8 @@ async def chat(req: ChatRequest):
                 print(f"sources: {event.get('sources')}")
                 dbg = event.get("debug_info", {})
                 print(f"retrieval_status: {dbg.get('retrieval_status')}")
+                if event.get("error"):
+                    print(f"error: {event.get('error')}")
                 print("==================================================\n")
             yield _sse(event)
 
@@ -197,6 +203,8 @@ async def chat_sync(req: ChatRequest):
     print(f"sources: {response.get('sources')}")
     dbg = response.get("debug_info", {})
     print(f"retrieval_status: {dbg.get('retrieval_status')}")
+    if response.get("error"):
+        print(f"error: {response.get('error')}")
     print("==================================================\n")
 
     return response

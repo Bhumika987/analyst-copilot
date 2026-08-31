@@ -17,7 +17,9 @@ for that asymmetry — the system is built to abstain rather than guess.
 pip install -r requirements.txt
 ```
 
-**2. Set your Groq API key**
+**2. Set your LLM provider credentials**
+
+Defaults to Groq (free tier, no cost, but a shared per-minute rate limit).
 
 PowerShell:
 ```powershell
@@ -25,6 +27,22 @@ $env:GROQ_API_KEY = "your-groq-api-key-here"
 ```
 
 Get a free key at [console.groq.com](https://console.groq.com).
+
+To use Claude instead (paid, metered, no free tier -- but no shared rate-limit
+ceiling and generally stronger reasoning on the calculation/judgment
+questions), set `LLM_PROVIDER=claude` plus an Anthropic API key, either as
+env vars or in `.env`:
+
+```powershell
+$env:LLM_PROVIDER = "claude"
+$env:ANTHROPIC_API_KEY = "your-anthropic-api-key-here"
+```
+
+Get a key at [console.anthropic.com](https://console.anthropic.com). Defaults
+to `claude-haiku-4-5` (cheapest/fastest tier, no shared rate limit like
+Groq's free tier); override with `CLAUDE_MODEL` (e.g. `claude-sonnet-5` or
+`claude-opus-5`) if answer quality on harder calculation/judgment questions
+matters more than cost per question.
 
 **3. Run the server**
 
@@ -72,14 +90,16 @@ retrieval.py         — builds a per-filing hybrid index: BM25 (primary
 llm.py               — evaluate_retrieval_status() is a rule-based gate
                        (concept, statement/section, period, and numeric-
                        value checks against the top chunks, via
-                       query_analyzer.py) that runs before any Groq call.
-                       If evidence fails those rules, we return NOT_FOUND
+                       query_analyzer.py) that runs before any LLM call. If
+                       evidence fails those rules, we return NOT_FOUND
                        immediately and the LLM is never invoked. When it is
-                       called (openai/gpt-oss-120b), a strict system prompt
-                       forbids using outside knowledge and requires
-                       NOT_FOUND when the passages don't contain the
-                       answer. Retries with exponential backoff on Groq
-                       429s.
+                       called, a strict system prompt forbids using outside
+                       knowledge and requires NOT_FOUND when the passages
+                       don't contain the answer. Provider is configurable
+                       via LLM_PROVIDER: Groq (openai/gpt-oss-120b, free
+                       tier, default) or Claude (claude-haiku-4-5 by
+                       default).
+                       Retries with exponential backoff on rate limits.
     │
     ▼
 main.py              — FastAPI app: upload/index endpoint (SSE progress),

@@ -124,6 +124,35 @@ def _table_to_pipe_text(table) -> str:
     return "\n".join(rows_out)
 
 
+def _embedded_table_caption(table_text: str) -> Optional[str]:
+    """Some tables (notably SEC cover-page tables, e.g. the Section 12(b)
+    securities-registration table) carry their real caption as the FIRST
+    ROW of the table itself, not as a separate preceding heading element
+    the way most tables do. _extract_table_context's heading-lookback
+    heuristic has nothing to find there and falls back to whichever nearby
+    (unrelated) heading happens to be closest -- confirmed against a real
+    miss: the Section 12(b) securities table, the exact evidence a "which
+    debt securities are registered" question needs, was mislabeled
+    "(Former Name or Former Address, if Changed Since Last Report)", a
+    neighboring cover-page field label, which meant the reranker's
+    title-matching boost never recognized this table as relevant to a
+    securities question at all.
+
+    Detects a single-cell first row ending in ":" -- a caption, not
+    tabular data (a genuine data row would render with "|" separators from
+    _table_to_pipe_text, since it has multiple cells) -- and returns it for
+    use as the title instead. Narrow and conservative by design: only
+    overrides when the table's own text unambiguously supplies a better
+    title than the heading-lookback found.
+    """
+    first_line = (table_text or "").split("\n", 1)[0].strip()
+    if not first_line or "|" in first_line or not first_line.endswith(":"):
+        return None
+    if len(first_line) > 120:
+        return None
+    return first_line.rstrip(":").strip()
+
+
 ITEM_RE = re.compile(
     r"^\s*(?:PART\s+[IVX]+\s*[-–—]?\s*)?ITEM\s+([0-9]{1,2}[A-Z]?)\s*[\.\:\-\–\—]?\s*(.*)$",
     re.IGNORECASE
@@ -520,6 +549,9 @@ def parse_filing_to_window_chunks(filepath: str) -> List[Dict]:
                 statement_title = table_ctx.get("statement_title")
                 tbl_title = table_ctx.get("table_title")
                 table_context = table_ctx.get("table_context")
+                embedded_caption = _embedded_table_caption(table_text)
+                if embedded_caption:
+                    tbl_title = embedded_caption
                 st_type = _detect_statement_type(
                     section=current_section,
                     subsection=current_subsection,

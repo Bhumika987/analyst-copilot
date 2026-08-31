@@ -14,6 +14,17 @@ SUPPORTED_EMBEDDING_MODELS = {"normal", "finlang", "financesmall"}
 DEFAULT_EMBEDDING_MODEL = "normal"
 
 
+# Keys _load_embedding_env() pulls from .env into os.environ, same
+# first-set-wins pattern as llm.py's _load_env(). HF_HUB_OFFLINE forces
+# huggingface_hub to skip its online cache-freshness check and serve
+# straight from the local cache -- worth setting once a gated model
+# (finlang/financesmall) is already downloaded, since that online check
+# needs auth and can 401 even though the cached files are fine (see
+# embedding_service.py's strict_load). Leave it unset while downloading a
+# model for the first time, or it'll fail outright instead of fetching it.
+_ENV_KEYS = ("EMBEDDING_MODEL", "HF_HUB_OFFLINE")
+
+
 def _load_embedding_env() -> None:
     for path in (
         Path.cwd() / ".env",
@@ -25,10 +36,11 @@ def _load_embedding_env() -> None:
         try:
             for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
                 line = line.strip()
-                if line.startswith("EMBEDDING_MODEL=") and not os.environ.get("EMBEDDING_MODEL"):
-                    value = line.split("=", 1)[1].strip(" '\"")
-                    if value:
-                        os.environ["EMBEDDING_MODEL"] = value
+                for key in _ENV_KEYS:
+                    if line.startswith(f"{key}=") and not os.environ.get(key):
+                        value = line.split("=", 1)[1].strip(" '\"")
+                        if value:
+                            os.environ[key] = value
         except Exception:
             pass
 
