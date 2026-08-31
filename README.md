@@ -214,10 +214,6 @@ curl -X POST http://localhost:8000/api/chat/sync \
   -d "{\"question\": \"What was FY2018 capital expenditure for 3M?\", \"doc_name\": \"3M_2018_10K\", \"top_k\": 5}"
 ```
 
----
-title: "Analyst Copilot — Approach Note"
----
-
 # Analyst Copilot — Approach Note
 
 A chatbot answering analyst questions over SEC filings, built for a rubric
