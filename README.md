@@ -263,39 +263,5 @@ moved to page-level chunking; Cerebras — rate limits/disconnects on ~10%
 of a real eval run; a direct Anthropic integration — subsumed by serving
 the same Claude models through AWS Bedrock instead).
 
-## Bugs found and fixed (evidenced, not guessed)
-
-Each of these was confirmed against a real filing and a real gold answer
-before being called a bug:
-
-- **Page-citation drift** — an early cover/TOC page with no page-number
-  label caused the running page counter to drift permanently ahead;
-  fixed with a resync check that trusts two consecutive real labels over
-  a possibly-already-drifted counter. Verified against Nike's 2018 10-K:
-  the balance sheet now cites page 45 (gold), not the drifted 48.
-- **A parsing bug that silently turned safe abstains into penalized wrong
-  answers** — the response parser required an exact string match against
-  `"NOT_FOUND"`; a model that wrote it correctly and then kept writing an
-  analysis paragraph had the whole blob graded as a real wrong answer.
-  Fixed to check the answer's first line, not the whole string.
-- **A cross-encoder reranker silently overriding domain-tuned scores** —
-  fixed with a sigmoid-blended score instead of a full override.
-- **A duplicate-disclosure retrieval trap** — segment data reported twice
-  in a 10-Q (a concise MD&A table and a granular footnote copy) had
-  nothing distinguishing them; confirmed against two real misses on the
-  same filer (JPMorgan 2021Q1 and 2022Q2 10-Qs).
-- **Non-calendar fiscal-year column confusion** — a three-column 10-Q
-  balance sheet's prior-year-same-quarter column is easy to mistake for
-  the fiscal-year-end column beside it; confirmed against a Best Buy
-  cash-trend question that got the direction backwards.
-- **A "(Gain)/(Loss) on X" sign-convention miss** — the caption word sets
-  the true sign in an "Other (income)/deductions, net" rollup, not the
-  parenthetical formatting; confirmed against a Pfizer question where an
-  $8.1B gain was read as a loss.
-- **A dead synonym-expansion code path** — a local financial-term-alias
-  function was silently shadowed by an identically-named import, so it
-  had never actually run; found by inspecting which function object the
-  name was bound to at runtime.
-
 Full architecture, formulas, notation, and the complete evidence trail for
 every bug above: see `DOCUMENTATION.md` in the project repository.
