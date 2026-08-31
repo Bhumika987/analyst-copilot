@@ -11,3 +11,4 @@ numpy
 httpx
 pydantic
 anthropic
+asyncpg

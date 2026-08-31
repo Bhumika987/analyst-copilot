@@ -11,10 +11,11 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ingest import ingest_filing_stream, ingest_bulk_filings_stream
+from ingest import ingest_filing_stream, ingest_bulk_filings_stream, hydrate_from_postgres
 from llm import answer_question, get_embedding, stream_answer
 from retrieval import get_index, list_indexed_docs, cross_filing_hybrid_search
 from config import get_embedding_model_name
+import postgres_store as pg
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -51,8 +52,29 @@ def _sse(event: dict) -> str:
 
 @app.on_event("startup")
 async def startup_load_indexes():
-    for doc_name in list_indexed_docs():
+    local_docs = set(list_indexed_docs())
+    for doc_name in local_docs:
         get_index(doc_name)
+
+    # Hydrate any filing Postgres knows about but this container's local
+    # (possibly empty/ephemeral) disk doesn't -- see
+    # ingest.hydrate_from_postgres for why this is what makes a freshly
+    # deployed container see previously-indexed filings without a seeded
+    # volume. No-op, not an error, when DATABASE_URL isn't set.
+    if pg.is_configured():
+        try:
+            pg_docs = await pg.list_indexed_filings()
+        except Exception as exc:
+            print(f"Warning: could not reach Postgres on startup (local-only for this run): {exc}")
+            pg_docs = []
+        missing = [d for d in pg_docs if d not in local_docs]
+        for doc_name in missing:
+            try:
+                await hydrate_from_postgres(doc_name)
+            except Exception as exc:
+                print(f"Warning: failed to hydrate '{doc_name}' from Postgres: {exc}")
+        if missing:
+            print(f"Hydrated {len(missing)} filing(s) from Postgres: {missing}")
 
 
 @app.get("/api/health")
@@ -77,6 +99,37 @@ async def list_filings():
             "vector_index_path": str(idx.vector_index_dir()),
         })
     return result
+
+
+@app.get("/api/filings/{doc_name}/page/{page_num}")
+async def get_filing_page(doc_name: str, page_num: int):
+    """
+    Every chunk from one page of one indexed filing, in original document
+    order -- what the UI's clickable page citations fetch so an analyst can
+    verify a cited page in context instead of taking a single quoted
+    sentence on faith. Not a raw-.htm viewer (the parsed chunk text is what
+    the LLM actually saw, which is the more useful thing to audit here).
+    """
+    idx = get_index(doc_name)
+    if idx is None:
+        raise HTTPException(status_code=404, detail=f"Filing '{doc_name}' is not indexed.")
+    page_chunks = [c for c in idx.chunks if c.get("page_num") == page_num]
+    if not page_chunks:
+        raise HTTPException(status_code=404, detail=f"No content found for page {page_num} of '{doc_name}'.")
+    return {
+        "doc_name": doc_name,
+        "page_num": page_num,
+        "chunks": [
+            {
+                "section": c.get("section"),
+                "subsection": c.get("subsection"),
+                "table_title": c.get("table_title"),
+                "chunk_type": c.get("chunk_type"),
+                "text": c.get("text"),
+            }
+            for c in page_chunks
+        ],
+    }
 
 
 @app.post("/api/filings/upload")

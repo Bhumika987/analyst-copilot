@@ -89,8 +89,17 @@
   }
   .bubble-assistant {
     max-width: 75%; background: var(--bg-card); border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
     padding: 14px 16px; border-radius: 14px 14px 14px 2px; font-size: 13.5px; line-height: 1.6;
   }
+  /* The abstain-vs-answered distinction is the core trust mechanism this
+     app is built around (scoring an abstain 0 and a confident wrong
+     answer -1 is exactly why the system is designed to abstain rather
+     than guess) -- it should be legible from across the room, not just in
+     the small badge text. The left accent carries that same found/
+     not-found color the badge uses, but on the whole card. */
+  .bubble-assistant.found { border-left-color: var(--green); }
+  .bubble-assistant.not-found { border-left-color: var(--amber); background: var(--amber-bg); }
 
   .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-bottom: 10px; }
   .badge.found { background: var(--green-bg); color: var(--green); }
@@ -106,7 +115,9 @@
   .evidence-card .page-tag {
     display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent);
     background: rgba(59,130,246,0.12); padding: 2px 8px; border-radius: 4px; margin-bottom: 6px;
+    cursor: pointer; border: none; font-family: inherit;
   }
+  .evidence-card .page-tag:hover { background: rgba(59,130,246,0.22); text-decoration: underline; }
   .evidence-card .quote { color: var(--text-dim); font-style: italic; line-height: 1.5; }
 
   .confidence-wrap { margin-top: 10px; }
@@ -161,6 +172,29 @@
     border-radius: 14px; padding: 22px;
   }
   #modal h2 { margin: 0 0 16px; font-size: 16px; }
+
+  /* ---------- Page viewer (evidence-card citations click through here) ---------- */
+  #page-viewer-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  #page-viewer-overlay.visible { display: flex; }
+  #page-viewer-modal {
+    width: min(640px, 90vw); max-height: 80vh; background: var(--bg-elevated);
+    border: 1px solid var(--border); border-radius: 14px; padding: 20px;
+    display: flex; flex-direction: column;
+  }
+  #page-viewer-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  #page-viewer-title { margin: 0; font-size: 15px; }
+  #page-viewer-close {
+    background: none; border: none; color: var(--text-dim); font-size: 22px; line-height: 1;
+    cursor: pointer; padding: 0 4px;
+  }
+  #page-viewer-close:hover { color: var(--text); }
+  #page-viewer-body { overflow-y: auto; font-size: 13px; line-height: 1.6; }
+  #page-viewer-body .pv-chunk { padding: 10px 0; border-bottom: 1px solid var(--border); white-space: pre-wrap; }
+  #page-viewer-body .pv-chunk:last-child { border-bottom: none; }
+  #page-viewer-body .pv-meta { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
   #dropzone {
     border: 2px dashed var(--border); border-radius: 10px; padding: 28px 16px;
     text-align: center; cursor: pointer; color: var(--text-dim); font-size: 13px;
@@ -253,6 +287,16 @@
       <button class="btn-secondary" id="cancel-btn">Cancel</button>
       <button class="btn-primary" id="index-btn" disabled>Index Filing(s)</button>
     </div>
+  </div>
+</div>
+
+<div id="page-viewer-overlay">
+  <div id="page-viewer-modal">
+    <div id="page-viewer-header">
+      <h2 id="page-viewer-title">Page</h2>
+      <button type="button" id="page-viewer-close" aria-label="Close">&times;</button>
+    </div>
+    <div id="page-viewer-body">Loading...</div>
   </div>
 </div>
 
@@ -351,6 +395,55 @@ const chatArea = document.getElementById("chat-area");
 const questionInput = document.getElementById("question-input");
 const sendBtn = document.getElementById("send-btn");
 
+// ---------- page viewer (evidence-card citations) ----------
+// Delegated on chatArea (not bound per-card) because evidence cards are
+// created dynamically for every answer -- a direct listener would miss
+// every card rendered after page load.
+const pageViewerOverlay = document.getElementById("page-viewer-overlay");
+const pageViewerTitle = document.getElementById("page-viewer-title");
+const pageViewerBody = document.getElementById("page-viewer-body");
+
+function closePageViewer() {
+  pageViewerOverlay.classList.remove("visible");
+}
+document.getElementById("page-viewer-close").addEventListener("click", closePageViewer);
+pageViewerOverlay.addEventListener("click", (e) => {
+  if (e.target === pageViewerOverlay) closePageViewer();
+});
+
+chatArea.addEventListener("click", async (e) => {
+  const tag = e.target.closest(".page-tag");
+  if (!tag) return;
+  const docName = tag.dataset.doc;
+  const pageNum = tag.dataset.page;
+  if (!docName || !pageNum) return;
+
+  pageViewerTitle.textContent = `${docName} — Page ${pageNum}`;
+  pageViewerBody.innerHTML = "Loading...";
+  pageViewerOverlay.classList.add("visible");
+
+  try {
+    const res = await fetch(`${API_BASE}/api/filings/${encodeURIComponent(docName)}/page/${encodeURIComponent(pageNum)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      pageViewerBody.innerHTML = `<div class="pv-meta">${escapeHtml(err.detail || "Could not load this page.")}</div>`;
+      return;
+    }
+    const data = await res.json();
+    if (!data.chunks || !data.chunks.length) {
+      pageViewerBody.innerHTML = `<div class="pv-meta">No content found for this page.</div>`;
+      return;
+    }
+    pageViewerBody.innerHTML = data.chunks.map(c => {
+      const metaParts = [c.section, c.subsection, c.table_title].filter(Boolean);
+      const meta = metaParts.length ? `<div class="pv-meta">${escapeHtml(metaParts.join(" › "))}</div>` : "";
+      return `<div class="pv-chunk">${meta}${escapeHtml(c.text || "")}</div>`;
+    }).join("");
+  } catch (err) {
+    pageViewerBody.innerHTML = `<div class="pv-meta">Failed to load: ${escapeHtml(String(err))}</div>`;
+  }
+});
+
 function updateSendState() {
   sendBtn.disabled = !questionInput.value.trim();
 }
@@ -405,6 +498,10 @@ function renderResult(bubble, streamedText, result) {
   const answerText = found ? (result.answer || streamedText || "") : "This information could not be verified in the ingested filing(s).";
   const confidencePct = Math.round((result.confidence || 0) * 100);
 
+  // Carries the found/not-found distinction onto the whole card (see the
+  // .bubble-assistant.found/.not-found CSS) -- not just the small badge.
+  bubble.className = `bubble-assistant ${badgeClass}`;
+
   let html = `<span class="badge ${badgeClass}"><span class="dot"></span>${badgeText}</span>`;
   html += `<div class="answer-text">${escapeHtml(answerText)}</div>`;
 
@@ -412,18 +509,24 @@ function renderResult(bubble, streamedText, result) {
 
   if (found && sources.length) {
     sources.forEach(src => {
-      const docLabel = src.doc_name ? `Filing: ${src.doc_name} &middot; ` : "";
+      const docName = src.doc_name || result.doc_name || "";
+      const docLabel = docName ? `Filing: ${docName} &middot; ` : "";
       html += `<div class="evidence-card">
-        <span class="page-tag">${docLabel}Page ${escapeHtml(src.page_num)}</span>
+        <button type="button" class="page-tag" data-doc="${escapeHtml(docName)}" data-page="${escapeHtml(src.page_num)}" title="Click to view the full page">${docLabel}Page ${escapeHtml(src.page_num)}</button>
         <div class="quote">&ldquo;${escapeHtml(src.evidence_text || "")}&rdquo;</div>
       </div>`;
     });
   }
 
-  html += `<div class="confidence-wrap">
-    <div class="confidence-label"><span>Confidence</span><span>${confidencePct}%</span></div>
-    <div class="confidence-track"><div class="confidence-fill" style="width:${confidencePct}%"></div></div>
-  </div>`;
+  // A confidence bar next to "Not Found" is always ~0% and just restates
+  // the abstain in a second, redundant form -- only meaningful once the
+  // system has actually committed to an answer.
+  if (found) {
+    html += `<div class="confidence-wrap">
+      <div class="confidence-label"><span>Confidence</span><span>${confidencePct}%</span></div>
+      <div class="confidence-track"><div class="confidence-fill" style="width:${confidencePct}%"></div></div>
+    </div>`;
+  }
 
   if (result.debug_info) {
     const dbg = result.debug_info;

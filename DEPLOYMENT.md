@@ -14,6 +14,9 @@ dashboard -- never commit them):
   providers wired into `backend/llm.py` if you're using those instead.
 - `EMBEDDING_MODEL` -- optional, defaults to `normal` (BGE-small, baked
   into the image at build time -- see the Dockerfile).
+- `DATABASE_URL` -- optional, a Postgres connection string. See
+  "Persistent storage" below -- lets the app survive without a mounted
+  volume.
 
 **Persistent storage.** `data/uploads/` (raw uploaded filings) and
 `data/indexes/` (their BM25/FAISS indexes) are created at runtime and are
@@ -21,6 +24,45 @@ NOT baked into the image -- without a persistent volume mounted at
 `/app/data`, every filing you index disappears on the next deploy or
 container restart and has to be re-uploaded. Mount a volume there on
 whichever host you use.
+
+**Or skip the volume and use Postgres instead.** Set `DATABASE_URL` (a
+normal Postgres connection string, `postgresql://user:pass@host:5432/db`)
+and the app additively syncs every indexed filing there too (see
+`backend/postgres_store.py`); on startup, any filing Postgres knows about
+that isn't on local disk gets pulled back down automatically (see
+`hydrate_from_postgres` in `backend/main.py`'s startup handler). This is
+what makes a host WITHOUT persistent volumes (or a fresh container after
+every deploy) still come up with all your indexed filings. A volume and
+Postgres both being set is fine too -- local disk stays a warm cache
+either way, Postgres is the durable copy. Postgres support requires the
+`vector` extension (pgvector) and only stores 384-dim embeddings, i.e.
+filings indexed with `EMBEDDING_MODEL=normal` (the default) -- see the
+docstring at the top of `backend/postgres_store.py` for why.
+
+To backfill filings you already indexed locally into a freshly provisioned
+Postgres database:
+```bash
+DATABASE_URL=postgresql://... python scripts/backfill_postgres.py
+```
+Safe to re-run; it upserts, it doesn't duplicate.
+
+### Azure specifically
+
+The $200 free-tier credit covers this comfortably for a hackathon-length
+deployment:
+1. **Azure Database for PostgreSQL - Flexible Server** (Burstable B1ms
+   tier is enough here) -- create it, then connect and run
+   `CREATE EXTENSION vector;` once (or let `postgres_store.ensure_schema()`
+   do it automatically on first app startup -- it runs
+   `CREATE EXTENSION IF NOT EXISTS vector;` itself). Copy the connection
+   string into `DATABASE_URL`.
+2. **Azure Container Apps** (or Web App for Containers) -- point it at
+   this repo's `Dockerfile`, either via a container registry push or
+   Azure's "build from GitHub repo" flow. Set `DATABASE_URL` and your LLM
+   provider's env vars as secrets in the Container App's configuration.
+3. Run the backfill script once (from your own machine, pointed at the
+   Azure Postgres connection string, or as a one-off Container Apps job)
+   to push your locally-indexed filings up before the first deploy.
 
 **Port.** The container reads `$PORT` and binds to it (falls back to
 `8000` if unset). Most PaaS hosts inject `PORT` automatically; for a bare

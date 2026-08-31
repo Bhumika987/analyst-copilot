@@ -16,11 +16,27 @@ import asyncio
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass
 from typing import AsyncGenerator, Dict, List, Optional
 from pathlib import Path
 import httpx
 import numpy as np
+
+# This module prints extensive debug output (retrieval scope, context
+# verification, raw LLM output, ...) straight to stdout. On Windows, stdout
+# defaults to the console's codepage (cp1252) rather than UTF-8, and SEC
+# filings routinely contain characters outside it -- private-use-area
+# bullet glyphs (U+F0B7, a Wingdings-style bullet) being a confirmed real
+# case. Without this, a single such character in any printed passage
+# crashes the whole process with UnicodeEncodeError, killing an entire eval
+# run over one cosmetic debug line. errors="replace" swaps the
+# unencodable character for "?" instead of raising.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from embedding_service import get_embedding_provider
 
@@ -184,6 +200,25 @@ Before answering, verify:
 
 Do not select evidence based on passage order.
 
+Many filers (retailers especially -- Best Buy, Nike, Target, and others in
+this corpus) use a non-calendar fiscal year that ends in late January or
+early February and is named for the calendar year in which MOST of it
+falls, not the year it ends in. A balance sheet in a Q2 10-Q typically
+carries three date columns: the current quarter-end, the PRIOR FISCAL
+YEAR-END (a date in late Jan/early Feb, often 3-4 months before the
+current quarter-end -- this is what "FYxxxx" means when a question asks
+for a fiscal-year figure), and the same quarter one year earlier (an
+interim date, not a fiscal year-end, even though it is also roughly a
+year before the current column). Do not treat the prior-year same-quarter
+column as "FYxxxx" merely because it is the most recent comparison
+column reported -- verify which column's date is actually a fiscal
+year-end before treating it as the requested fiscal year's figure.
+Confirmed against a real miss: a Best Buy Q2 FY2024 10-Q reported cash as
+of May 4 2024, February 3 2024, and April 29 2023 -- February 3 2024 is
+the FY2023 year-end figure; April 29 2023 is an interim Q1 FY2024 figure
+that happens to also be about a year earlier, and using it as "FY2023"
+produced the wrong comparison and the wrong directional conclusion.
+
 ## Evidence priority
 
 Prefer evidence in this order:
@@ -214,6 +249,18 @@ When the requested answer is directly reported:
 * use the exact table row and correct period column
 
 Do not calculate a different metric when the requested metric is already directly reported unless the question explicitly requests recalculation.
+
+A line item captioned "(Gain) on ..." or "(Loss) on ..." inside an
+"Other income/(expense)" or "Other (income)/deductions, net" section has
+its true sign set by the CAPTION WORD, not by whether the adjacent dollar
+figure itself is shown in parentheses -- these sections roll up net
+EXPENSE, so a real gain is entered as a subtraction (a negative expense)
+and a real loss is entered as an addition. A caption of "(Gain) on
+completion of X" paired with a parenthesized dollar amount is a gain that
+INCREASES net income by that amount, not a loss that reduces it, even
+though the figure is formatted exactly like a negative number. Read the
+caption word first; use the parenthetical formatting only to confirm the
+sign implied by that word, never to override it.
 
 ## Tables
 
@@ -264,6 +311,8 @@ Unless the question or evidence specifies otherwise:
 * Percentage-point change = new percentage - old percentage
 
 When an average-balance formula is explicitly required, use the average of the beginning and ending balances. Otherwise, do not introduce an average balance unless the supplied formula or question requires it.
+
+When the question spells out its own formula in words (e.g. "ROA is defined as: net income / average total assets"), report the result in that literal form and do not add a step the question didn't ask for. A metric that is conventionally expressed as a percentage (ROA, margins, growth rates) is NOT an exception: if the question's own formula has no "× 100" or "%" step, report the plain decimal it produces, rounded exactly as instructed -- do not convert it to a percentage on your own initiative. Confirmed against a real miss: a question defined ROA as a plain ratio and asked for it "rounded to two decimal places" -- the calculation itself was correct (0.01465) but got reported as "1.47%" instead of "0.01", which a grader checking the literal requested format marks wrong even though the arithmetic was right.
 
 ## Required formulas and fallback inputs
 
@@ -1207,7 +1256,20 @@ def _parse_llm_output(text: str, top_chunks: Optional[List[Dict]] = None, ret_st
     answer_match = re.search(r"ANSWER:\s*(.+?)(?:\nSOURCE:|$)", text, re.IGNORECASE | re.DOTALL)
     if answer_match:
         answer = answer_match.group(1).strip()
-        if answer and answer.upper() != "NOT_FOUND":
+        # A model that puts "ANSWER: NOT_FOUND" first and then keeps
+        # writing (an ANALYSIS paragraph explaining the gap, say) instead
+        # of stopping there violates the prompt's requested order, but the
+        # signal is still an honest abstain -- checking the answer's FIRST
+        # LINE against "NOT_FOUND" catches that; the old exact-full-string
+        # check didn't, and treated "NOT_FOUND\n\nANALYSIS: ..." as a real
+        # answer whose text happened to be that whole blob. Confirmed
+        # against a real miss: this turned a genuine abstain (correctly
+        # worth 0 under the scoring rubric) into a graded WRONG answer
+        # (worth -1) purely because of response-formatting drift, not
+        # because the model actually guessed wrong -- the one failure mode
+        # the abstain-first design exists specifically to avoid.
+        answer_head = answer.split("\n", 1)[0].strip().rstrip(".:").upper()
+        if answer and answer_head != "NOT_FOUND":
             sources = []
             source_matches = re.findall(
                 r"SOURCE:\s*(?:([^\n]*?)\s+)?Page\s*(\d+)\s*[-–—:]\s*[\"“”'']?(.+?)[\"“”'']?(?:\n|$)",

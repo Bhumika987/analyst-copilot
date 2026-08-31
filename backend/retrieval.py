@@ -64,8 +64,20 @@ FIN_SYNONYM_GROUPS = [
 ]
 
 
-def expand_query(query: str) -> str:
-    """Append likely filing-wording synonyms for any financial term the query mentions."""
+def _expand_financial_synonyms(query: str) -> str:
+    """Append likely filing-wording synonyms for any financial term the query mentions.
+
+    Named with a leading underscore (was `expand_query`) because the
+    unprefixed name collides with `query_analyzer.expand_query`, imported
+    below -- that import silently rebinds `expand_query` in this module's
+    namespace once the module finishes loading, so this function was never
+    actually being called by `tokenize_query`/`search_bge_faiss` despite
+    looking like it was. Both expansions are real and complementary (this
+    one covers generic filing-wording synonyms; query_analyzer's covers
+    query-type-specific retrieval terms), so both are composed explicitly
+    at each call site now instead of relying on whichever name won the
+    import order.
+    """
     q_lower = query.lower()
     extra_terms = []
     for group in FIN_SYNONYM_GROUPS:
@@ -119,7 +131,7 @@ _COMPARISON_MARKERS = (
 
 
 def tokenize_query(query: str) -> List[str]:
-    tokens = tokenize(expand_query(query))
+    tokens = tokenize(expand_query(_expand_financial_synonyms(query)))
     filtered = [t for t in tokens if t not in _STOPWORDS]
     return filtered or tokens
 
@@ -556,6 +568,25 @@ def deterministic_rerank(query: str, candidates: List[Dict], query_info: Optiona
         if query_info.query_type in ("NUMERIC_LOOKUP", "CALCULATION") and c.get("chunk_type") == "table":
             metadata_boost += 15.0
 
+        # 7b. Superlative/"which segment" comparison tie-break: MD&A summary
+        # tables vs Notes/footnote duplicates. Confirmed against a real miss
+        # (JPM 2021Q1 10-Q, 2022Q2 10-Q): segment revenue/income is
+        # disclosed twice -- once in a concise MD&A "Business Segment
+        # Results" summary table (the page gold answers actually cite), and
+        # again, in far more granular form, inside a numbered Note ("Note
+        # 25 - Business segments") deep in the financial-statement
+        # footnotes. Both match segment/revenue keywords equally well, so
+        # nothing previously distinguished them, and retrieval kept picking
+        # the Notes copy -- much longer and looser as an argmax source for
+        # "which segment had the lowest/highest X" questions. Break the tie
+        # toward the MD&A summary table explicitly.
+        if any(k in query.lower() for k in ("which segment", "which category", "which region", "which product", "which business", "which division")):
+            subsection_lower = (c.get("subsection") or "").lower()
+            if re.match(r"^\s*note\s+\d+\b", subsection_lower):
+                metadata_boost -= 30.0
+            if "segment result" in tbl_title or "segment result" in statement_text:
+                metadata_boost += 30.0
+
         structure_features = _query_structure_features(query, query_info, {**c, "concept_matched": concept_matched})
         structure_boost = (
             structure_features["query_term_boost"] +
@@ -799,7 +830,7 @@ class FilingIndex:
         if self.vector_store is None:
             return []
         try:
-            expanded_q = expand_query(query)
+            expanded_q = expand_query(_expand_financial_synonyms(query))
             embed_svc = get_embedding_service()
             qv = embed_svc.embed_query(expanded_q)
             if qv is None:

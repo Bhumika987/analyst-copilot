@@ -15,9 +15,58 @@ from llm import get_embedding
 from config import get_embedding_model_name
 from filing_parser import parse_filing_to_window_chunks, extract_filing_metadata
 from retrieval import FilingIndex, register_index
+import postgres_store as pg
 
 EMBED_BATCH_SIZE = 10
 EMBED_BATCH_DELAY_SECONDS = 0.5
+
+
+async def _sync_to_postgres_if_configured(index: FilingIndex):
+    """
+    Best-effort additive sync to Postgres (see backend/postgres_store.py)
+    after a filing is saved locally. Never lets a Postgres problem fail
+    ingestion -- Postgres is optional deployment infrastructure, the local
+    file-based store is (and stays) the source of truth this always
+    succeeds against.
+    """
+    if not pg.is_configured():
+        return
+    try:
+        await pg.save_filing(
+            index.doc_name, index.chunks, index.vectors,
+            get_embedding_model_name(), metadata=index.metadata,
+        )
+    except Exception as exc:
+        print(f"Warning: Postgres sync failed for '{index.doc_name}' (local index is unaffected): {exc}")
+
+
+async def hydrate_from_postgres(doc_name: str) -> FilingIndex:
+    """
+    Rebuild one filing's index in memory from Postgres and cache it locally
+    -- this is what makes a freshly deployed container (empty local
+    data/indexes/, ephemeral disk, no seeded volume) actually see filings
+    that were indexed and backfilled before it started, without re-parsing
+    the original .htm (which isn't even present on this container).
+
+    BM25 is rebuilt locally from the fetched chunk text (cheap, in-memory,
+    milliseconds even for a large filing) rather than also being stored in
+    Postgres -- Postgres's own full-text search already substitutes for it
+    query-time (see postgres_store.hybrid_search), so this local rebuild is
+    purely to keep FilingIndex's normal in-process hybrid_search path
+    working unchanged for a hydrated filing, same as any locally-indexed
+    one. Saved to local disk after hydrating so a container restart within
+    the same session doesn't re-fetch from Postgres every time.
+    """
+    chunks, vectors, metadata = await pg.load_filing(doc_name)
+    if chunks is None:
+        return None
+    index = FilingIndex(doc_name, chunks, metadata=metadata)
+    await run_blocking(index.build_bm25)
+    if vectors is not None:
+        index.set_vectors(vectors)
+    await run_blocking(index.save)
+    register_index(doc_name, index)
+    return index
 
 
 async def run_blocking(func, *args):
@@ -57,6 +106,7 @@ async def ingest_filing_stream(filepath: str, doc_name: str, use_embeddings: boo
         yield {"type": "progress", "doc_name": doc_name, "message": "Saving index to disk...", "progress": 0.95}
         await run_blocking(index.save)
         register_index(doc_name, index)
+        await _sync_to_postgres_if_configured(index)
 
         yield {"type": "progress", "doc_name": doc_name, "message": "Done.", "progress": 1.0}
         yield {"type": "complete", "doc_name": doc_name, "message": f"Indexed '{doc_name}' with {len(chunks)} chunks.", "metadata": metadata}
@@ -106,6 +156,7 @@ async def ingest_filing(filepath: str, doc_name: str, use_embeddings: bool = Tru
 
     await run_blocking(index.save)
     register_index(doc_name, index)
+    await _sync_to_postgres_if_configured(index)
     return index
 
 
