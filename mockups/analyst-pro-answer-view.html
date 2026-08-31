@@ -1,0 +1,513 @@
+<title>Analyst Pro</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  /* Committed single-theme product mockup: spec pins a light SaaS palette with a
+     dark sidebar. Every color is painted explicitly so the page holds on any host ground. */
+  :root {
+    --sidebar-top:  #0F1419;
+    --sidebar-bot:  #151B28;
+    --teal:         #10B981;
+    --teal-accent:  #06D6A0;
+    --teal-deep:    #047857;
+
+    --app-bg:       #F8F9FB;
+    --card:         #FFFFFF;
+    --stage:        #E7EAF0;
+
+    --ink:          #111827;
+    --ink-2:        #6B7280;
+    --ink-3:        #9CA3AF;
+
+    --border:       #D1D5DB;
+    --border-lt:    #E5E7EB;
+
+    --success:      #10B981;
+    --warning:      #F59E0B;
+    --danger:       #EF4444;
+
+    --side-fg:      #E6E8EC;
+    --side-fg-2:    #9AA3B2;
+    --side-fg-3:    #6B7482;
+    --side-line:    rgba(255,255,255,.07);
+    --side-hover:   rgba(255,255,255,.04);
+
+    --shadow-card:  0 1px 3px rgba(17,24,39,.10), 0 6px 20px rgba(17,24,39,.05);
+    --shadow-sm:    0 1px 2px rgba(17,24,39,.06);
+    --radius:       10px;
+
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--stage);
+    font-family: var(--sans);
+    color: var(--ink);
+    display: flex; align-items: center; justify-content: center;
+    padding: 28px;
+  }
+
+  /* ---------- frame ---------- */
+  .frame {
+    width: min(1180px, 100%);
+    height: 700px;
+    display: flex;
+    background: var(--app-bg);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px -12px rgba(17,24,39,.28), 0 0 0 1px rgba(17,24,39,.05);
+  }
+
+  /* ---------- sidebar ---------- */
+  .sidebar {
+    width: 260px; flex-shrink: 0;
+    background: linear-gradient(165deg, var(--sidebar-top), var(--sidebar-bot));
+    display: flex; flex-direction: column;
+    color: var(--side-fg);
+  }
+  .brand {
+    display: flex; align-items: center; gap: 11px;
+    padding: 20px 20px 18px;
+    border-bottom: 1px solid var(--side-line);
+  }
+  .brand-mark {
+    width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+    background: linear-gradient(150deg, var(--teal-accent), var(--teal));
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 10px rgba(6,214,160,.35);
+  }
+  .brand-mark svg { display: block; }
+  .brand-name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  .brand-sub { font-size: 11px; color: var(--side-fg-3); margin-top: 1px; }
+
+  .side-scroll { flex: 1; overflow-y: auto; padding: 18px 12px 12px; }
+  .side-label {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--side-fg-3);
+    padding: 0 8px; margin-bottom: 10px;
+  }
+  .q-list { display: flex; flex-direction: column; gap: 3px; }
+  .q-item {
+    display: block; width: 100%; text-align: left;
+    background: transparent; border: 0; cursor: pointer;
+    padding: 10px 10px; border-radius: 8px;
+    color: var(--side-fg-2); font-family: inherit; font-size: 12.5px; line-height: 1.45;
+    border-left: 2px solid transparent;
+    transition: background .14s ease, color .14s ease;
+  }
+  .q-item:hover { background: var(--side-hover); color: var(--side-fg); }
+  .q-item.current {
+    background: rgba(16,185,129,.13);
+    border-left-color: var(--teal-accent);
+    color: #EAFBF4;
+  }
+  .q-item .q-meta {
+    display: flex; align-items: center; gap: 7px;
+    margin-bottom: 5px;
+  }
+  .q-tag {
+    font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: #05261C; background: var(--teal-accent);
+    padding: 2px 6px; border-radius: 4px;
+  }
+  .q-num {
+    font-family: var(--mono); font-size: 10px; color: var(--side-fg-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .q-item.current .q-num { color: rgba(234,251,244,.55); }
+
+  .side-foot { padding: 12px; border-top: 1px solid var(--side-line); }
+  .add-btn {
+    width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 10px 12px; border-radius: 8px; cursor: pointer;
+    background: rgba(255,255,255,.05);
+    border: 1px solid var(--side-line);
+    color: var(--side-fg); font-family: inherit; font-size: 12.5px; font-weight: 600;
+    transition: background .14s ease, border-color .14s ease;
+  }
+  .add-btn:hover { background: rgba(16,185,129,.14); border-color: rgba(16,185,129,.4); }
+  .add-btn svg { display: block; }
+
+  /* ---------- main ---------- */
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--app-bg); }
+
+  .topbar {
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 24px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border-lt);
+  }
+  .file-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .ticker {
+    font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    color: var(--teal-deep); background: rgba(16,185,129,.11);
+    border: 1px solid rgba(16,185,129,.22);
+    padding: 4px 8px; border-radius: 6px; flex-shrink: 0;
+  }
+  .file-name { font-size: 14px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; }
+  .file-meta { font-size: 11.5px; color: var(--ink-3); margin-top: 1px; }
+  .switch-btn {
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: 7px;
+    padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border);
+    font-family: inherit; font-size: 12.5px; font-weight: 600; color: #374151;
+    transition: border-color .14s ease, color .14s ease;
+  }
+  .switch-btn:hover { border-color: var(--teal); color: var(--teal-deep); }
+  .switch-btn svg { display: block; }
+
+  .scroll { flex: 1; overflow-y: auto; padding: 26px 28px 30px; }
+  .scroll-inner { max-width: 720px; margin: 0 auto; }
+
+  .answer-head { margin-bottom: 18px; }
+  .crumb {
+    font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 8px;
+  }
+  h1.answer-title {
+    margin: 0 0 12px; font-size: 23px; font-weight: 700;
+    letter-spacing: -.02em; color: var(--ink); text-wrap: balance;
+  }
+  .status-row { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .badge-success {
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 11px; border-radius: 999px;
+    background: rgba(16,185,129,.12); color: var(--teal-deep);
+    font-size: 11.5px; font-weight: 600;
+  }
+  .badge-success .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .answer-desc {
+    flex: 1; min-width: 240px;
+    font-size: 13px; line-height: 1.6; color: var(--ink-2); margin: 2px 0 0;
+  }
+  .answer-desc b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- answer card ---------- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border-lt);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 22px;
+    margin-top: 18px;
+    animation: rise .4s cubic-bezier(.2,.7,.3,1) both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+
+  .metric-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .metric {
+    border: 1px solid var(--border-lt); border-radius: 8px;
+    padding: 14px 16px; background: #FCFCFD;
+  }
+  .metric-label {
+    font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .metric-value {
+    font-size: 30px; font-weight: 700; letter-spacing: -.02em;
+    color: var(--ink); -webkit-text-fill-color: var(--ink);
+    margin-top: 6px; font-variant-numeric: tabular-nums;
+  }
+  .metric-delta {
+    font-size: 11.5px; font-weight: 500; margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric-delta.up { color: var(--teal-deep); }
+  .metric-delta.flat { color: var(--ink-3); }
+
+  .reconcile {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: var(--ink-2);
+    padding: 10px 4px 0; margin-top: 12px;
+    border-top: 1px dashed var(--border-lt);
+  }
+  .reconcile .r-val { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+
+  .total {
+    margin-top: 14px; padding: 16px 18px;
+    border-radius: 8px;
+    background: linear-gradient(120deg, rgba(6,214,160,.12), rgba(16,185,129,.06));
+    border: 1px solid rgba(16,185,129,.22);
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  .total-label {
+    font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--teal-deep);
+  }
+  .total-value {
+    font-size: 35px; font-weight: 800; letter-spacing: -.025em; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(105deg, var(--teal-deep), var(--teal) 55%, var(--teal-accent));
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent; -webkit-text-fill-color: transparent;
+  }
+
+  /* ---------- evidence ---------- */
+  .evidence { margin-top: 22px; }
+  .evidence-head {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  }
+  .evidence-src { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .page-badge {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    color: #374151; background: #EEF0F3; border: 1px solid var(--border-lt);
+    padding: 2px 7px; border-radius: 5px;
+  }
+  .evidence-head .spacer { flex: 1; }
+
+  .code {
+    margin: 0;
+    background: linear-gradient(180deg, #0F1419, #12161F);
+    border: 1px solid #1E2430;
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-family: var(--mono); font-size: 12px; line-height: 1.75;
+    color: #C7CBD3;
+    -webkit-font-smoothing: auto;
+  }
+  .code .h { color: #8B93A1; }
+  .code .lbl { color: #C7CBD3; }
+  .code .n { color: var(--teal-accent); font-weight: 600; }
+  .code .rule { color: #4B5361; }
+  .code .tot { color: #EAF6F1; font-weight: 600; }
+
+  .evidence-actions { margin-top: 12px; display: flex; gap: 10px; }
+  .link-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 8px 13px; border-radius: 8px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--teal);
+    color: var(--teal-deep); font-family: inherit; font-size: 12.5px; font-weight: 600;
+    transition: background .14s ease;
+  }
+  .link-btn:hover { background: rgba(16,185,129,.08); }
+  .link-btn svg { display: block; }
+
+  .citation {
+    margin-top: 14px;
+    background: rgba(16,185,129,.09);
+    border: 1px solid rgba(16,185,129,.2);
+    border-left: 3px solid var(--teal);
+    border-radius: 8px;
+    padding: 13px 15px;
+    font-size: 12.5px; line-height: 1.6; color: #0F5132;
+  }
+  .citation .cite-src {
+    display: block; margin-top: 7px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--teal-deep);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- composer ---------- */
+  .composer {
+    flex-shrink: 0;
+    background: var(--card);
+    border-top: 1px solid var(--border-lt);
+    padding: 12px 24px 16px;
+  }
+  .tags { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tag {
+    padding: 5px 11px; border-radius: 999px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border-lt);
+    font-family: inherit; font-size: 11.5px; font-weight: 500; color: var(--ink-2);
+    transition: border-color .14s ease, color .14s ease, background .14s ease;
+  }
+  .tag:hover { border-color: var(--teal); color: var(--teal-deep); }
+  .tag.active {
+    background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.4); color: var(--teal-deep);
+    font-weight: 600;
+  }
+  .input-row { display: flex; gap: 10px; align-items: center; }
+  .input-row input {
+    flex: 1; height: 42px;
+    border: 1px solid var(--border); border-radius: 9px;
+    padding: 0 14px; font-family: inherit; font-size: 13px; color: var(--ink);
+    background: var(--card); outline: none;
+    transition: border-color .14s ease, box-shadow .14s ease;
+  }
+  .input-row input::placeholder { color: var(--ink-3); }
+  .input-row input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(16,185,129,.14); }
+  .send-btn {
+    height: 42px; padding: 0 18px; border: 0; border-radius: 9px; cursor: pointer;
+    background: linear-gradient(135deg, var(--teal), var(--teal-accent));
+    color: #fff; font-family: inherit; font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+    box-shadow: 0 2px 10px rgba(16,185,129,.3);
+    transition: filter .14s ease, transform .14s ease;
+  }
+  .send-btn:hover { filter: brightness(1.06); }
+  .send-btn:active { transform: translateY(1px); }
+  .send-btn svg { display: block; }
+
+  :focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  .scroll::-webkit-scrollbar, .side-scroll::-webkit-scrollbar { width: 8px; }
+  .scroll::-webkit-scrollbar-thumb { background: #D8DCE3; border-radius: 4px; }
+  .side-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 4px; }
+
+  @media (max-width: 760px) {
+    body { padding: 0; }
+    .frame { height: 100vh; border-radius: 0; }
+    .sidebar { display: none; }
+  }
+</style>
+
+<div class="frame">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
+          <path d="M3 15.5h14M5 13V8M10 13V4M15 13v-6" stroke="#05261C" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span>
+        <div class="brand-name">Analyst Pro</div>
+        <div class="brand-sub">Financial document analysis</div>
+      </span>
+    </div>
+
+    <div class="side-scroll">
+      <div class="side-label">Questions asked</div>
+      <div class="q-list">
+        <button class="q-item">
+          <div class="q-meta"><span class="q-num">01</span></div>
+          What were the principal risk factors disclosed for fiscal 2024?
+        </button>
+        <button class="q-item current" aria-current="true">
+          <div class="q-meta"><span class="q-tag">Current</span><span class="q-num">02</span></div>
+          Operating expenses breakdown
+        </button>
+        <button class="q-item">
+          <div class="q-meta"><span class="q-num">03</span></div>
+          How did gross margin change versus fiscal 2023?
+        </button>
+      </div>
+    </div>
+
+    <div class="side-foot">
+      <button class="add-btn">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        Add filing
+      </button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="topbar">
+      <div class="file-info">
+        <span class="ticker">AAPL</span>
+        <span>
+          <div class="file-name">Apple 10-K 2024</div>
+          <div class="file-meta">Filed Nov 1, 2024 &middot; Fiscal year ended Sep 28, 2024 &middot; 121 pages</div>
+        </span>
+      </div>
+      <button class="switch-btn">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 5h8l-2.5-2.5M12 9H4l2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Switch
+      </button>
+    </header>
+
+    <div class="scroll">
+      <div class="scroll-inner">
+        <div class="answer-head">
+          <div class="crumb">Answer</div>
+          <h1 class="answer-title">Operating expenses breakdown</h1>
+          <div class="status-row">
+            <span class="badge-success"><span class="dot"></span>Verified from filing</span>
+            <p class="answer-desc">
+              Apple's total operating expenses for fiscal 2024 were <b>$69.96&nbsp;billion</b>, up
+              <b>8.4%</b> year over year. The increase was driven mainly by higher R&amp;D headcount
+              and continued infrastructure investment.
+            </p>
+          </div>
+        </div>
+
+        <section class="card" aria-label="Answer detail">
+          <div class="metric-grid">
+            <div class="metric">
+              <div class="metric-label">Research &amp; development</div>
+              <div class="metric-value">$29.9B</div>
+              <div class="metric-delta up">&#9650; 11.8% vs FY2023</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Selling, general &amp; admin.</div>
+              <div class="metric-value">$23.2B</div>
+              <div class="metric-delta flat">&#9650; 5.2% vs FY2023</div>
+            </div>
+          </div>
+
+          <div class="reconcile">
+            <span>Other operating items</span>
+            <span class="r-val">$16.86B</span>
+          </div>
+
+          <div class="total">
+            <span class="total-label">Total operating expenses &middot; FY2024</span>
+            <span class="total-value">$69.96B</span>
+          </div>
+        </section>
+
+        <section class="evidence" aria-label="Evidence">
+          <div class="evidence-head">
+            <span class="evidence-src">Part II, Item 8 &mdash; Financial Statements</span>
+            <span class="page-badge">Page 47</span>
+            <span class="spacer"></span>
+          </div>
+
+          <pre class="code"><span class="h">CONSOLIDATED STATEMENTS OF OPERATIONS</span>
+<span class="h">(In millions)                                    2024</span>
+
+<span class="lbl">Operating expenses:</span>
+<span class="lbl">    Research and development                   </span><span class="n">29,904</span>
+<span class="lbl">    Selling, general and administrative        </span><span class="n">23,203</span>
+<span class="lbl">    Other operating items                      </span><span class="n">16,857</span>
+<span class="rule">                                              --------</span>
+<span class="tot">        Total operating expenses               </span><span class="n">69,964</span></pre>
+
+          <div class="evidence-actions">
+            <button class="link-btn">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 2h4v4M12 2 6.5 7.5M11 8.5V11a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              View in document
+            </button>
+          </div>
+
+          <div class="citation">
+            &ldquo;Total operating expenses were $69.96&nbsp;billion in fiscal 2024, comprising
+            $29.9&nbsp;billion of research and development expense and $23.2&nbsp;billion of selling,
+            general and administrative expense.&rdquo;
+            <span class="cite-src">Apple Inc. &mdash; Form 10-K, FY2024 &middot; Part II, Item 8 &middot; p. 47</span>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="composer">
+      <div class="tags">
+        <button class="tag">Revenue</button>
+        <button class="tag active">Expenses</button>
+        <button class="tag">Margins</button>
+        <button class="tag">Risks</button>
+        <button class="tag">Growth</button>
+      </div>
+      <div class="input-row">
+        <input type="text" placeholder="Ask a follow-up about Apple's 10-K&hellip;" aria-label="Ask a follow-up question" />
+        <button class="send-btn">
+          Send
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7h9M7 3l4 4-4 4" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </footer>
+  </main>
+</div>

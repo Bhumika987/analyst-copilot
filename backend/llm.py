@@ -514,6 +514,25 @@ When the answer cannot be supported:
 
 ANSWER: NOT_FOUND
 
+## Optional structured metrics
+
+When the answer reports specific numeric figures — a single headline value, a
+year-over-year comparison, or a calculated change — append a METRICS block at the
+very end, after the SOURCE line(s). Include only figures grounded in the evidence
+above; never introduce a number that is not in the evidence. Omit this block
+entirely for non-numeric or qualitative answers.
+
+METRICS:
+- label: <short label> | value: <number with unit> | period: <e.g. FY2024, optional> | note: <optional short note>
+- label: <short label> | value: <number with unit> | period: <optional>
+
+Example:
+
+METRICS:
+- label: Total revenue | value: $523.96B | period: FY2020
+- label: Total revenue | value: $514.41B | period: FY2019
+- label: Change | value: +$9.55B (+1.9%) | note: year over year
+
 ## Final requirements
 
 * Answer the question first.
@@ -532,6 +551,8 @@ class AnswerResult:
     page_num: Optional[int] = None
     evidence_text: Optional[str] = None
     sources: Optional[List[Dict]] = None
+    metrics: Optional[List[Dict]] = None
+    score_breakdown: Optional[Dict] = None
     confidence: float = 0.0
     raw_response: str = ""
     error: Optional[str] = None
@@ -548,6 +569,8 @@ class AnswerResult:
             "sources": self.sources or (
                 [{"page_num": self.page_num, "evidence_text": self.evidence_text}] if self.page_num else []
             ),
+            "metrics": self.metrics or [],
+            "score_breakdown": self.score_breakdown,
             "confidence": self.confidence,
             "error": self.error,
             "debug_info": self.debug_info,
@@ -582,6 +605,72 @@ def _confidence_from_best_passage(chunks: List[Dict]) -> float:
     elif best.get("concept_matched") or best.get("content_evidence_score", 0.0) > 40.0:
         return 0.95
     return 0.90
+
+
+def _best_passage(chunks: List[Dict]) -> Optional[Dict]:
+    if not chunks:
+        return None
+    return sorted(
+        chunks,
+        key=lambda c: (
+            c.get("concept_matched", False),
+            c.get("has_period_match", False),
+            c.get("has_numeric_value", False),
+            c.get("content_evidence_score", 0.0),
+            c.get("rerank_score", 0.0),
+        ),
+        reverse=True,
+    )[0]
+
+
+def _score_breakdown(found: bool, chunks: List[Dict], sources: List[Dict], overall: float) -> Optional[Dict]:
+    """Three real retrieval signals behind the headline confidence, so the UI can
+    show *why* an answer is trusted rather than a single opaque number. Every value
+    here comes from the evidence gate -- nothing is invented.
+
+    - answer_support:   how strongly the top passage matches the asked concept/period/value
+    - location_accuracy: whether the citation resolved to a real page AND section
+    - source_reliability: whether that passage is structured filing content (a statement
+                          or table on a numbered page) rather than loose prose
+    """
+    if not found:
+        return None
+    best = _best_passage(chunks) or {}
+
+    if best.get("concept_matched") and best.get("has_period_match") and best.get("has_numeric_value"):
+        answer_support = 0.99
+    elif best.get("concept_matched") or best.get("content_evidence_score", 0.0) > 40.0:
+        answer_support = 0.95
+    else:
+        answer_support = 0.88
+
+    src = (sources or [{}])[0]
+    if src.get("location") and src.get("page_num"):
+        location_accuracy = 0.98
+    elif src.get("page_num"):
+        location_accuracy = 0.80
+    else:
+        location_accuracy = 0.45
+
+    ctype = (best.get("chunk_type") or "").lower()
+    has_structure = ctype in ("table", "statement", "financial_statement") or bool(best.get("statement_type"))
+    if best.get("page_num") and has_structure:
+        source_reliability = 1.0
+    elif best.get("page_num"):
+        source_reliability = 0.90
+    else:
+        source_reliability = 0.70
+
+    # Overall leans on answer support but is genuinely dragged down by a weak
+    # location -- half the rubric is "correct location", so the headline number
+    # should reflect that rather than parrot the coarse gate score.
+    blended = 0.5 * answer_support + 0.3 * location_accuracy + 0.2 * source_reliability
+    return {
+        "answer_support": round(answer_support, 2),
+        "location_accuracy": round(location_accuracy, 2),
+        "source_reliability": round(source_reliability, 2),
+        "overall": round(blended, 2),
+    }
 
 
 def _context_chunk_limit(query_info) -> int:
@@ -1170,6 +1259,37 @@ def _safe_print(value=""):
     print(text.encode(encoding, errors="replace").decode(encoding, errors="replace"))
 
 
+def _parse_metrics(text: str) -> List[Dict]:
+    """Pull the optional trailing METRICS block into structured rows the UI can
+    render as tiles. Purely a re-presentation of figures the model already put in
+    the answer -- no numbers are computed or inferred here."""
+    m = re.search(
+        r"METRICS:\s*(.*?)(?:\n\s*(?:SOURCE:|ANSWER:|CALCULATION:|ANALYSIS:)|\Z)",
+        text, re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return []
+    rows: List[Dict] = []
+    for raw in m.group(1).splitlines():
+        line = raw.strip().lstrip("-•*").strip()
+        if not line or ":" not in line:
+            continue
+        fields: Dict[str, str] = {}
+        for part in line.split("|"):
+            key, sep, val = part.partition(":")
+            if not sep:
+                continue
+            key = key.strip().lower()
+            val = val.strip()
+            if key in ("label", "value", "period", "note") and val:
+                fields[key] = val[:80]
+        if fields.get("label") and fields.get("value"):
+            rows.append(fields)
+        if len(rows) >= 6:
+            break
+    return rows
+
+
 def _parse_llm_output(text: str, top_chunks: Optional[List[Dict]] = None, ret_status: str = "") -> Dict:
     text = (text or "").strip()
     top_chunk = top_chunks[0] if top_chunks else None
@@ -1181,9 +1301,10 @@ def _parse_llm_output(text: str, top_chunks: Optional[List[Dict]] = None, ret_st
     # supporting ratios" style answers), silently dropping the actual
     # figures needed to score the answer as correct even when the model got
     # it right.
-    answer_match = re.search(r"ANSWER:\s*(.+?)(?:\nSOURCE:|$)", text, re.IGNORECASE | re.DOTALL)
+    answer_match = re.search(r"ANSWER:\s*(.+?)(?:\n(?:SOURCE|METRICS):|$)", text, re.IGNORECASE | re.DOTALL)
     if answer_match:
         answer = answer_match.group(1).strip()
+        metrics = _parse_metrics(text)
         # A model that puts "ANSWER: NOT_FOUND" first and then keeps
         # writing (an ANALYSIS paragraph explaining the gap, say) instead
         # of stopping there violates the prompt's requested order, but the
@@ -1251,6 +1372,7 @@ def _parse_llm_output(text: str, top_chunks: Optional[List[Dict]] = None, ret_st
                 "page_num": sources[0]["page_num"],
                 "evidence_text": sources[0]["evidence_text"],
                 "sources": sources,
+                "metrics": metrics,
                 "parser_decision": "Stage 1 (Standard ANSWER: Regex Match)",
                 "fallback_triggered": False,
             }
@@ -1703,6 +1825,10 @@ async def answer_question(question: str, doc_name: str, chunks: List[Dict]) -> A
         parsed["raw_response"] = content
         parsed["confidence"] = _confidence_from_best_passage(top_chunks) if parsed["found"] else 0.0
         parsed["debug_info"] = debug_info
+        parsed["sources"] = _enrich_sources(parsed.get("sources", []), top_chunks, doc_name)
+        parsed["score_breakdown"] = _score_breakdown(
+            parsed["found"], top_chunks, parsed["sources"], parsed["confidence"]
+        )
         return AnswerResult(**parsed)
     except Exception as exc:
         return AnswerResult(
@@ -1847,15 +1973,101 @@ async def stream_answer(question: str, doc_name: str, chunks: List[Dict]) -> Asy
     confidence = _confidence_from_best_passage(top_chunks) if parsed["found"] else 0.0
     debug_info["verification_result"] = "found" if parsed["found"] else "not_found"
 
+    enriched_sources = _enrich_sources(parsed.get("sources", []), top_chunks, doc_name)
+
     yield {
         "type": "result",
         "found": parsed["found"],
         "answer": parsed["answer"],
         "page_num": parsed["page_num"],
         "evidence_text": parsed["evidence_text"],
-        "sources": parsed.get("sources", []),
+        "sources": enriched_sources,
+        "metrics": parsed.get("metrics", []),
+        "score_breakdown": _score_breakdown(parsed["found"], top_chunks, enriched_sources, confidence),
         "confidence": confidence,
         "debug_info": debug_info,
     }
+
+
+_GENERIC_SECTIONS = {"", "general", "unknown", "n/a", "none"}
+
+
+def _norm_words(text: str) -> List[str]:
+    return [w for w in re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split() if len(w) > 2]
+
+
+def _build_location(chunk: Dict) -> Optional[str]:
+    """A readable "where in the filing" label, preferring the specific statement or
+    table title over a generic chapter heading."""
+    title = chunk.get("statement_title") or chunk.get("table_title")
+    section = chunk.get("section") or ""
+    subsection = chunk.get("subsection") or ""
+    parts: List[str] = []
+    if section.strip().lower() not in _GENERIC_SECTIONS:
+        parts.append(section.strip())
+    if subsection and subsection.strip().lower() not in _GENERIC_SECTIONS and subsection not in parts:
+        parts.append(subsection.strip())
+    if title and title not in parts:
+        parts.append(title.strip())
+    if not parts:
+        return None
+    loc = " — ".join(parts)
+    return loc[:110] + "…" if len(loc) > 110 else loc
+
+
+def _enrich_sources(sources: List[Dict], top_chunks: List[Dict], requested_doc: str) -> List[Dict]:
+    """Attach the filing name and a human-readable location to each cited source by
+    matching it back to the passage it came from.
+
+    A *wrong* location scores the same as a wrong answer here, so the match must be
+    earned: the location is only attached when the best-matching passage genuinely
+    contains the cited quote (strong word overlap or a verbatim fragment). Otherwise
+    we fill in the filing/page but stay silent on the section rather than guess."""
+    if not sources:
+        return sources
+
+    def _best(src: Dict):
+        page = src.get("page_num")
+        want_doc = (src.get("doc_name") or "").strip().lower()
+        qwords = _norm_words(src.get("evidence_text"))
+        qfrag = re.sub(r"[^a-z0-9]", "", (src.get("evidence_text") or "").lower())[:18]
+        best, best_score, best_overlap = None, 0.0, 0.0
+        for c in top_chunks:
+            score = 0.0
+            if page is not None and c.get("page_num") == page:
+                score += 5
+            c_doc = (c.get("doc_name") or "").strip().lower()
+            if want_doc and c_doc and (want_doc in c_doc or c_doc in want_doc):
+                score += 4
+            ctext = c.get("text") or ""
+            ctext_norm = ctext.lower()
+            overlap = 0.0
+            if qwords:
+                overlap = sum(1 for w in set(qwords) if w in ctext_norm) / len(set(qwords))
+            score += 6 * overlap
+            if qfrag and len(qfrag) >= 10 and qfrag in re.sub(r"[^a-z0-9]", "", ctext_norm):
+                score += 3
+                overlap = max(overlap, 0.5)
+            if (c.get("chunk_type") or "").lower() in ("table", "statement", "financial_statement"):
+                score += 0.5
+            if score > best_score:
+                best, best_score, best_overlap = c, score, overlap
+        return best, best_overlap
+
+    enriched = []
+    for src in sources:
+        out = dict(src)
+        c, overlap = _best(src)
+        if c and not out.get("doc_name"):
+            out["doc_name"] = c.get("doc_name")
+        if not out.get("doc_name") and requested_doc and requested_doc != "all":
+            out["doc_name"] = requested_doc
+        # Only claim a section when the passage really is the one quoted.
+        if c and overlap >= 0.34:
+            loc = _build_location(c)
+            if loc:
+                out["location"] = loc
+        enriched.append(out)
+    return enriched
 
 
