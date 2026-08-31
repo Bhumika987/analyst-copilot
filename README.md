@@ -229,11 +229,7 @@ with `evaluate_retrieval_status()`'s rule-based checks (concept, statement
 type, fiscal year, numeric value) in `llm.py`, so we abstain before ever
 calling the LLM when the top chunks don't actually satisfy the question.
 This is the single biggest lever on the score, since every wrong answer
-costs twice what a right answer earns. A diagnostic rerun of the 86
-hardest-known-failing practice questions, before and after this session's
-fixes, moved the aggregate score on that subset from −16 to −11 with 5
-questions flipping to fully correct — real, but measured on a deliberately
-hardest-case slice, not the full 136-question set (see
+costs twice what a right answer earns.  (see
 [DOCUMENTATION.md §5](DOCUMENTATION.md#5-measurement--evaluation-methodology-and-example-output)
 for the honest caveats and full numbers).
 
